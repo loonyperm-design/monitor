@@ -1,0 +1,2256 @@
+<!DOCTYPE html>
+<html lang="ru" class="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Anycubic Kobra X — LAN Telemetry Monitor</title>
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet" />
+  <script>
+    tailwind.config = {
+      darkMode: 'class',
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            mono: ['JetBrains Mono', 'monospace']
+          },
+          colors: {
+            kobra: {
+              bg: '#0b0f17',
+              card: '#111827',
+              border: '#1f2937',
+              accent: '#f97316',
+              cyan: '#06b6d4'
+            }
+          }
+        }
+      }
+    };
+  </script>
+  <style>
+    body {
+      background-color: #0b0f17;
+      color: #f3f4f6;
+      font-family: 'Inter', system-ui, sans-serif;
+      overflow-x: hidden;
+    }
+    .glass-card {
+      background: rgba(17, 24, 39, 0.88);
+      backdrop-filter: blur(12px);
+      border: 1px solid rgba(55, 65, 81, 0.6);
+    }
+    .pulse-dot {
+      animation: pulseGlow 2s infinite;
+    }
+    @keyframes pulseGlow {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.45; transform: scale(1.18); }
+    }
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col selection:bg-orange-500 selection:text-white">
+
+  <!-- Toast Notification -->
+  <div id="toastContainer" class="fixed bottom-4 right-4 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Top Header & Manual IP Connection Bar -->
+  <header class="sticky top-0 z-30 border-b border-gray-800 bg-gray-950/90 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
+      
+      <!-- Brand & Model Info -->
+      <div class="flex items-center justify-between">
+        <div class="flex items-center gap-3">
+          <div class="w-10 h-10 rounded-xl bg-gradient-to-br from-orange-500 to-amber-600 flex items-center justify-center shadow-lg shadow-orange-500/20 font-extrabold text-white text-lg tracking-tighter">
+            KX
+          </div>
+          <div>
+            <div class="flex items-center gap-2">
+              <h1 class="font-bold text-base sm:text-lg text-white tracking-tight">Anycubic Kobra X</h1>
+              <span class="text-[11px] font-mono uppercase px-2 py-0.5 rounded-full bg-orange-500/15 text-orange-400 border border-orange-500/30">LAN Monitor</span>
+              <span class="hidden sm:inline-block text-[11px] font-mono text-gray-400">ID: 20030</span>
+            </div>
+            <p class="text-xs text-gray-400 flex items-center gap-2">
+              <span id="connIndicatorDot" class="w-2 h-2 rounded-full bg-emerald-400 pulse-dot inline-block"></span>
+              <span id="connStatusText">Активен перехват телеметрии (MQTT TLS :9883)</span>
+            </p>
+          </div>
+        </div>
+
+        <!-- Mobile Bridge Script Button -->
+        <button id="openBridgeModalBtnMobile" type="button" class="lg:hidden px-3 py-1.5 rounded-lg text-xs font-medium bg-gray-800 hover:bg-gray-700 text-cyan-400 border border-gray-700 transition">
+          LAN Мост
+        </button>
+      </div>
+
+      <!-- Manual IP & Port Configuration Form + Sound Alert Controls -->
+      <div class="flex flex-wrap items-center gap-2">
+        <div class="flex items-center bg-gray-900 border border-gray-700 rounded-xl px-2.5 py-1.5 focus-within:border-orange-500 transition flex-1 sm:flex-initial">
+          <span class="text-[11px] font-mono text-gray-400 mr-2 select-none">IP:</span>
+          <input id="printerIpInput" type="text" value="192.168.1.50" placeholder="192.168.1.50" aria-label="IP адрес принтера"
+            class="bg-transparent text-xs sm:text-sm font-mono text-white focus:outline-none w-28 sm:w-32" />
+        </div>
+
+        <div class="hidden sm:flex items-center bg-gray-900 border border-gray-700 rounded-xl px-2.5 py-1.5" title="HTTP порт рукопожатия (:18910/info) и TLS MQTT порт (:9883)">
+          <span class="text-[11px] font-mono text-gray-400 mr-1.5">Порты:</span>
+          <span class="text-xs font-mono text-cyan-400">18910 / 9883</span>
+        </div>
+
+        <div class="flex items-center bg-gray-900 border border-gray-700 rounded-xl px-2.5 py-1.5 flex-1 sm:flex-initial">
+          <span class="text-[11px] font-mono text-gray-400 mr-1.5 select-none">WS:</span>
+          <input id="wsBridgeInput" type="text" value="ws://192.168.1.50:8765" placeholder="ws://127.0.0.1:8765" aria-label="Адрес WebSocket моста"
+            class="bg-transparent text-xs font-mono text-gray-300 focus:outline-none w-32 sm:w-36" />
+        </div>
+
+        <button id="connectIpBtn" type="button"
+          class="px-3.5 py-1.5 rounded-xl text-xs sm:text-sm font-semibold bg-orange-500 hover:bg-orange-600 active:bg-orange-700 text-white shadow-md shadow-orange-500/20 transition flex items-center gap-1.5">
+          <span>Подключить IP</span>
+        </button>
+
+        <!-- Sound & Push Alert Toggle -->
+        <button id="toggleSoundAlertBtn" type="button"
+          class="px-3 py-1.5 rounded-xl text-xs font-medium bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 transition flex items-center gap-1.5"
+          title="Звуковое и всплывающее оповещение по окончании печати">
+          <span id="soundAlertIcon">🔔</span>
+          <span id="soundAlertLabel">Звук: ВКЛ</span>
+        </button>
+
+        <button id="openBridgeModalBtn" type="button"
+          class="hidden lg:flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-medium bg-gray-800/90 hover:bg-gray-700 text-cyan-400 border border-gray-700 transition">
+          <span>Python LAN-мост</span>
+        </button>
+      </div>
+    </div>
+
+    <!-- Sub-bar: Mode & Scenario Presets + Navigation Tabs -->
+    <div class="border-t border-gray-800/80 bg-gray-900/60">
+      <div class="max-w-7xl mx-auto px-4 py-2 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+        
+        <!-- Navigation Tabs -->
+        <div class="flex items-center gap-1 overflow-x-auto pb-1 sm:pb-0" role="tablist">
+          <button type="button" data-tab="dashboard" class="nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-500/20 text-orange-400 border border-orange-500/40 transition whitespace-nowrap">
+            Дашборд принтера
+          </button>
+          <button type="button" data-tab="bedmesh" class="nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 border border-transparent transition whitespace-nowrap flex items-center gap-1.5">
+            <span>Карта высот стола (Bed Mesh)</span>
+            <span class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-emerald-500/20 text-emerald-300">7×7</span>
+          </button>
+          <button type="button" data-tab="packets" class="nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 border border-transparent transition whitespace-nowrap flex items-center gap-1.5">
+            <span>Перехват пакетов (MQTT JSON)</span>
+            <span id="packetCountBadge" class="px-1.5 py-0.2 rounded-full text-[10px] font-mono bg-cyan-500/20 text-cyan-300">0</span>
+          </button>
+          <button type="button" data-tab="protocol" class="nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 border border-transparent transition whitespace-nowrap">
+            Схема протокола Kobra X
+          </button>
+        </div>
+
+        <!-- Telemetry State Simulator Selector (for testing all printer states) -->
+        <div class="flex items-center gap-1.5 overflow-x-auto">
+          <span class="text-[11px] text-gray-400 font-medium whitespace-nowrap mr-1">Режим потока:</span>
+          <button type="button" data-preset="printing" class="preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition whitespace-nowrap">
+            Печать 4 цвета
+          </button>
+          <button type="button" data-preset="finished" class="preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-amber-300 hover:bg-gray-700 border border-amber-500/40 transition whitespace-nowrap">
+            Финиш 100% (Тест сигнала)
+          </button>
+          <button type="button" data-preset="calibrating" class="preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition whitespace-nowrap">
+            Калибровка / 1-й слой
+          </button>
+          <button type="button" data-preset="error11854" class="preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition whitespace-nowrap">
+            Ошибка 11854 (Ретракт)
+          </button>
+          <button type="button" data-preset="idle" class="preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition whitespace-nowrap">
+            Ожидание (Idle)
+          </button>
+        </div>
+
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 py-4 space-y-4">
+
+    <!-- Print Finished Celebration & Alert Banner (Shown when print reaches 100%) -->
+    <div id="printFinishedBanner" class="hidden rounded-2xl bg-gradient-to-r from-emerald-950/90 via-teal-950/90 to-gray-900 border border-emerald-500/60 p-4 shadow-lg shadow-emerald-500/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div class="flex items-start gap-3">
+        <div class="w-10 h-10 rounded-xl bg-emerald-500/20 border border-emerald-400/50 flex items-center justify-center text-emerald-300 text-lg font-extrabold shrink-0">
+          ✓
+        </div>
+        <div>
+          <div class="flex flex-wrap items-center gap-2">
+            <h2 class="text-sm sm:text-base font-extrabold text-emerald-200">Печать успешно завершена (100%)!</h2>
+            <span id="finishedBedSafetyBadge" class="text-[11px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+              Стол остывает (36.5°C) — деталь можно снимать
+            </span>
+          </div>
+          <p id="finishedSummaryText" class="text-xs text-emerald-100/80 mt-1 font-mono">
+            Файл: Benchy_4Color_ACE_Gen2.gcode.3mf · Слоев: 380/380 · Время: 01:53:03 · Расход: 93.2 г
+          </p>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 self-start sm:self-center">
+        <button id="replayChimeBtn" type="button" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-200 border border-emerald-500/40 transition whitespace-nowrap">
+          Повторить сигнал
+        </button>
+        <button id="dismissFinishedBannerBtn" type="button" class="px-3 py-1.5 rounded-xl text-xs font-semibold bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 transition whitespace-nowrap">
+          Принято ✕
+        </button>
+      </div>
+    </div>
+
+    <!-- Error / Diagnostic Alert Banner (Shown dynamically when printer reports an error code) -->
+    <div id="printerAlertBanner" class="hidden rounded-2xl bg-red-950/80 border border-red-500/50 p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div class="flex items-start gap-3">
+        <div class="w-8 h-8 rounded-lg bg-red-500/20 border border-red-500/40 flex items-center justify-center text-red-400 font-bold shrink-0">!</div>
+        <div>
+          <h2 id="alertTitle" class="text-sm font-bold text-red-200">Код ошибки принтера: 11854 (Сбой ретракта канала #4)</h2>
+          <p id="alertDesc" class="text-xs text-red-300/90 mt-0.5">Принтер приостановил печать: обнаружено застревание нити при смене цвета в 4-м канале встроенного фидера ACE GEN 2.</p>
+        </div>
+      </div>
+      <span class="text-xs font-mono px-2.5 py-1 rounded-lg bg-red-900/60 text-red-200 border border-red-700/50 self-start sm:self-center whitespace-nowrap">
+        ТОЛЬКО МОНИТОРИНГ
+      </span>
+    </div>
+
+    <!-- ==================== TAB 1: DASHBOARD ==================== -->
+    <section id="tab-dashboard" class="space-y-4">
+      
+      <!-- Top KPI Status Strip -->
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <!-- State Card -->
+        <div class="glass-card rounded-2xl p-3.5 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-400 font-medium">Состояние Kobra X</span>
+            <span id="stateBadgePill" class="px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+              ПЕЧАТЬ
+            </span>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span id="currentJobStateText" class="text-base sm:text-lg font-bold text-white truncate">Печать модели</span>
+            <span id="speedProfileBadge" class="text-xs font-mono text-orange-400">Standard</span>
+          </div>
+          <div class="mt-1.5 text-[11px] font-mono text-gray-400 flex items-center justify-between">
+            <span id="activeIpDisplay">IP: 192.168.1.50</span>
+            <span id="fwVersionDisplay">FW: v1.2.5-K4Pro</span>
+          </div>
+        </div>
+
+        <!-- Nozzle Temp KPI -->
+        <div class="glass-card rounded-2xl p-3.5 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-400 font-medium">Хотэнд (Сопло 0.4мм)</span>
+            <span id="nozzleHeatBadge" class="text-[11px] font-mono text-orange-400 bg-orange-500/15 px-2 py-0.5 rounded-full">Нагрев 78%</span>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="nozzleTempCurrent" class="text-xl sm:text-2xl font-extrabold font-mono text-white">220.4°C</span>
+            <span class="text-xs font-mono text-gray-400">/ <span id="nozzleTempTarget">220</span>°C</span>
+          </div>
+          <div class="mt-2 w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+            <div id="nozzleTempBar" class="bg-gradient-to-r from-orange-500 to-red-500 h-full transition-all duration-300" style="width: 73%"></div>
+          </div>
+        </div>
+
+        <!-- Heated Bed KPI -->
+        <div class="glass-card rounded-2xl p-3.5 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-400 font-medium">Стол PEI (260×260)</span>
+            <span id="bedHeatBadge" class="text-[11px] font-mono text-cyan-400 bg-cyan-500/15 px-2 py-0.5 rounded-full">Стабильно</span>
+          </div>
+          <div class="mt-2 flex items-baseline gap-2">
+            <span id="bedTempCurrent" class="text-xl sm:text-2xl font-extrabold font-mono text-white">60.1°C</span>
+            <span class="text-xs font-mono text-gray-400">/ <span id="bedTempTarget">60</span>°C</span>
+          </div>
+          <div class="mt-2 w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+            <div id="bedTempBar" class="bg-gradient-to-r from-cyan-500 to-blue-500 h-full transition-all duration-300" style="width: 60%"></div>
+          </div>
+        </div>
+
+        <!-- Print Progress & Layer KPI -->
+        <div class="glass-card rounded-2xl p-3.5 flex flex-col justify-between">
+          <div class="flex items-center justify-between">
+            <span class="text-xs text-gray-400 font-medium">Прогресс задачи</span>
+            <span id="layerCounterBadge" class="text-[11px] font-mono text-emerald-400 bg-emerald-500/15 px-2 py-0.5 rounded-full">Слой 142 / 380</span>
+          </div>
+          <div class="mt-2 flex items-baseline justify-between">
+            <span id="printProgressPct" class="text-xl sm:text-2xl font-extrabold font-mono text-white">37.4%</span>
+            <span id="zHeightText" class="text-xs font-mono text-gray-400">Z: 28.40 мм</span>
+          </div>
+          <div class="mt-2 w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+            <div id="printProgressBar" class="bg-gradient-to-r from-emerald-500 to-teal-400 h-full transition-all duration-300" style="width: 37.4%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Main Middle Grid: Camera/Visualizer (Left 7 cols) + Job Details & ACE Feeder (Right 5 cols) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- Left Column: Live RTSP Camera / Toolhead Visualizer / Bed Mesh Mini-View + Temperature History Chart -->
+        <div class="lg:col-span-7 space-y-4">
+          
+          <!-- RTSP Camera & G-Code Visualizer Card -->
+          <div class="glass-card rounded-2xl p-4">
+            <div class="flex flex-wrap items-center justify-between gap-2 mb-3">
+              <div>
+                <div class="flex items-center gap-2">
+                  <h2 class="text-sm font-bold text-white">Визуальный контроль Kobra X</h2>
+                  <span class="text-[10px] font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30" id="rtspSessionBadge">
+                    RTSP 720p @ 10fps
+                  </span>
+                </div>
+                <p id="rtspUrlDisplay" class="text-[11px] font-mono text-gray-400 mt-0.5">
+                  Поток из сессии: rtsp://192.168.1.50:554/live/0?token=kx_98a2f
+                </p>
+              </div>
+
+              <!-- View Mode Switcher: Camera Feed vs 2D XY Bed Map vs 3D Bed Mesh -->
+              <div class="flex items-center bg-gray-900 p-1 rounded-xl border border-gray-800">
+                <button id="viewModeCamBtn" type="button" class="px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500 text-white transition">
+                  Камера RTSP
+                </button>
+                <button id="viewModeMapBtn" type="button" class="px-2.5 py-1 rounded-lg text-xs font-medium text-gray-400 hover:text-white transition">
+                  Карта стола XY
+                </button>
+                <button id="viewModeMeshQuickBtn" type="button" class="px-2.5 py-1 rounded-lg text-xs font-medium text-gray-400 hover:text-white transition">
+                  3D Сетка высот
+                </button>
+              </div>
+            </div>
+
+            <!-- Interactive Canvas Viewport -->
+            <div class="relative rounded-xl overflow-hidden bg-gray-950 border border-gray-800 aspect-video w-full">
+              <canvas id="printerViewportCanvas" class="w-full h-full block"></canvas>
+              
+              <!-- HUD Overlay Top-Left -->
+              <div class="absolute top-2.5 left-2.5 flex flex-wrap items-center gap-1.5 pointer-events-none">
+                <span class="px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-emerald-400 border border-emerald-500/30 flex items-center gap-1">
+                  <span class="w-1.5 h-1.5 rounded-full bg-emerald-400 pulse-dot"></span>
+                  LIVE TELEMETRY
+                </span>
+                <span id="hudCoordsBadge" class="px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-gray-200 border border-gray-700">
+                  X: 130.0  Y: 130.0  Z: 28.4
+                </span>
+                <span id="hudLedBadge" class="px-2 py-0.5 rounded bg-black/70 backdrop-blur-sm text-[10px] font-mono text-amber-300 border border-amber-500/30">
+                  LED: ВКЛ (Авто с камерой)
+                </span>
+              </div>
+
+              <!-- HUD Overlay Bottom-Left: First-Layer Camera Angle Note -->
+              <div class="absolute bottom-2.5 left-2.5 right-2.5 flex items-center justify-between pointer-events-none">
+                <span id="hudCameraNotice" class="px-2 py-0.5 rounded bg-black/75 text-[10px] font-mono text-gray-300 border border-gray-800">
+                  Камера 720p (10 кадр/с) · AI Spaghetti Detection: Активен
+                </span>
+                <span id="hudSpeedBadge" class="px-2 py-0.5 rounded bg-black/75 text-[10px] font-mono text-orange-400 border border-orange-500/30">
+                  480 мм/с · 1450 Вт пик
+                </span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Real-Time Temperature History Chart -->
+          <div class="glass-card rounded-2xl p-4">
+            <div class="flex items-center justify-between mb-3">
+              <div>
+                <h2 class="text-sm font-bold text-white">График температур в реальном времени</h2>
+                <p class="text-xs text-gray-400">Данные из топика <code class="text-orange-400 font-mono">.../printer/public/20030/.../report</code></p>
+              </div>
+              <div class="flex items-center gap-3 text-xs font-mono">
+                <span class="flex items-center gap-1.5 text-orange-400">
+                  <span class="w-2.5 h-2.5 rounded-sm bg-orange-500 inline-block"></span>Сопло
+                </span>
+                <span class="flex items-center gap-1.5 text-cyan-400">
+                  <span class="w-2.5 h-2.5 rounded-sm bg-cyan-400 inline-block"></span>Стол
+                </span>
+              </div>
+            </div>
+            <div class="relative h-60 w-full">
+              <canvas id="tempChartCanvas"></canvas>
+            </div>
+          </div>
+
+        </div>
+
+        <!-- Right Column: Active Job Telemetry + 4-Color Built-in Feeder (ACE GEN 2) + Fans/Mechanics -->
+        <div class="lg:col-span-5 space-y-4">
+          
+          <!-- Active Print Job Telemetry Card -->
+          <div class="glass-card rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between border-b border-gray-800 pb-2.5">
+              <div>
+                <h2 class="text-sm font-bold text-white">Текущее задание печати</h2>
+                <p class="text-xs text-gray-400">Метаданные активного файла (.gcode.3mf)</p>
+              </div>
+              <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-gray-800 text-gray-300 border border-gray-700">Только чтение</span>
+            </div>
+
+            <div class="bg-gray-900/90 rounded-xl p-3 border border-gray-800/80 flex items-center justify-between gap-2">
+              <div class="min-w-0">
+                <div class="text-[11px] text-gray-400">Имя файла в памяти принтера:</div>
+                <div id="jobFileName" class="text-sm font-mono font-semibold text-white truncate mt-0.5">
+                  Benchy_4Color_ACE_Gen2.gcode.3mf
+                </div>
+              </div>
+              <button id="openMeshTabQuickBtn" type="button" class="px-2.5 py-1.5 rounded-xl text-[11px] font-mono bg-cyan-500/15 hover:bg-cyan-500/25 text-cyan-300 border border-cyan-500/30 shrink-0 transition">
+                Карта стола Δ 0.14мм →
+              </button>
+            </div>
+
+            <div class="grid grid-cols-3 gap-2 text-center">
+              <div class="bg-gray-900/70 rounded-xl p-2.5 border border-gray-800/80">
+                <div class="text-[11px] text-gray-400">Прошло</div>
+                <div id="jobElapsedText" class="text-sm font-mono font-bold text-white mt-0.5">00:42:18</div>
+              </div>
+              <div class="bg-gray-900/70 rounded-xl p-2.5 border border-gray-800/80">
+                <div class="text-[11px] text-gray-400">Осталось</div>
+                <div id="jobRemainingText" class="text-sm font-mono font-bold text-emerald-400 mt-0.5">01:10:45</div>
+              </div>
+              <div class="bg-gray-900/70 rounded-xl p-2.5 border border-gray-800/80">
+                <div class="text-[11px] text-gray-400">Завершение</div>
+                <div id="jobEtaText" class="text-sm font-mono font-bold text-cyan-400 mt-0.5">04:23</div>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-2 gap-2 text-xs">
+              <div class="bg-gray-900/50 rounded-xl px-3 py-2 border border-gray-800/60 flex items-center justify-between">
+                <span class="text-gray-400">Скорость:</span>
+                <span id="telemetrySpeedVal" class="font-mono font-semibold text-white">480 мм/с</span>
+              </div>
+              <div class="bg-gray-900/50 rounded-xl px-3 py-2 border border-gray-800/60 flex items-center justify-between">
+                <span class="text-gray-400">Ускорение:</span>
+                <span id="telemetryAccelVal" class="font-mono font-semibold text-white">15 000 мм/с²</span>
+              </div>
+              <div class="bg-gray-900/50 rounded-xl px-3 py-2 border border-gray-800/60 flex items-center justify-between">
+                <span class="text-gray-400">Расход нити:</span>
+                <span id="telemetryFilamentVal" class="font-mono font-semibold text-white">34.8 г / 11.6 м</span>
+              </div>
+              <div class="bg-gray-900/50 rounded-xl px-3 py-2 border border-gray-800/60 flex items-center justify-between">
+                <span class="text-gray-400">Экономия продувки:</span>
+                <span class="font-mono font-semibold text-emerald-400">-81.25% (ACE 2)</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Built-in 4-Color Feeder (Multi-color Unit) & ACE 2 Expansion -->
+          <div class="glass-card rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <h2 class="text-sm font-bold text-white">Многоцветная система ACE GEN 2</h2>
+                <p class="text-xs text-gray-400">Встроенный 4-цветный фидер + внешний бокс ACE 2 Pro</p>
+              </div>
+              <span id="activeSlotBadge" class="px-2.5 py-1 rounded-lg text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/30">
+                В сопле: Слот #1
+              </span>
+            </div>
+
+            <!-- 4 Filament Slots Grid -->
+            <div id="filamentSlotsGrid" class="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <!-- Populated dynamically by JS -->
+            </div>
+
+            <!-- External ACE 2 Pro Drybox Telemetry Strip -->
+            <div class="bg-gray-900/80 rounded-xl p-3 border border-gray-800 flex flex-wrap items-center justify-between gap-2 text-xs">
+              <div class="flex items-center gap-2">
+                <span class="w-2 h-2 rounded-full bg-cyan-400"></span>
+                <span class="font-medium text-gray-200">Внешний ACE 2 Pro (Опрос раз в 30с):</span>
+              </div>
+              <div class="flex items-center gap-3 font-mono">
+                <span id="aceBoxTemp" class="text-amber-300">Сушка: 45°C (ВКЛ)</span>
+                <span id="aceBoxHumidity" class="text-cyan-300">Влажность: 16%</span>
+                <span id="aceAutoFeed" class="text-emerald-400">Auto-Feed: ОК</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Cooling Fans & Hardware Sensors Card -->
+          <div class="glass-card rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <h2 class="text-sm font-bold text-white">Кулеры и датчики шасси</h2>
+              <span id="noiseLevelBadge" class="text-xs font-mono text-gray-400">Шум: ~47 дБ (Phase Stepping)</span>
+            </div>
+
+            <div class="space-y-2.5 text-xs">
+              <!-- Part cooling fan -->
+              <div>
+                <div class="flex justify-between mb-1">
+                  <span class="text-gray-300">Обдув модели (Part Cooling Fan)</span>
+                  <span id="fanPartVal" class="font-mono font-semibold text-cyan-400">100%</span>
+                </div>
+                <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+                  <div id="fanPartBar" class="bg-cyan-400 h-full transition-all duration-300" style="width: 100%"></div>
+                </div>
+              </div>
+
+              <!-- Auxiliary fan -->
+              <div>
+                <div class="flex justify-between mb-1">
+                  <span class="text-gray-300">Вспомогательный обдув (Aux Fan)</span>
+                  <span id="fanAuxVal" class="font-mono font-semibold text-teal-400">80%</span>
+                </div>
+                <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+                  <div id="fanAuxBar" class="bg-teal-400 h-full transition-all duration-300" style="width: 80%"></div>
+                </div>
+              </div>
+
+              <!-- Hotend heatsink fan -->
+              <div>
+                <div class="flex justify-between mb-1">
+                  <span class="text-gray-300">Кулер радиатора хотэнда</span>
+                  <span id="fanHotendVal" class="font-mono font-semibold text-orange-400">100%</span>
+                </div>
+                <div class="w-full bg-gray-800 h-1.5 rounded-full overflow-hidden">
+                  <div id="fanHotendBar" class="bg-orange-400 h-full transition-all duration-300" style="width: 100%"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+    </section>
+
+    <!-- ==================== TAB 2: BED MESH HEIGHTMAP (КАРТА ВЫСОТ СТОЛА) ==================== -->
+    <section id="tab-bedmesh" class="hidden space-y-4">
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+        
+        <!-- Left 7 Cols: Interactive 3D Surface Mesh Canvas (like Mainsail / Fluidd) -->
+        <div class="lg:col-span-7 glass-card rounded-2xl p-4 space-y-3">
+          <div class="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div class="flex items-center gap-2">
+                <h2 class="text-base font-bold text-white">3D Карта высот стола (LeviQ 3.0 Auto-Leveling)</h2>
+                <span class="text-[11px] font-mono px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                  Сетка 7×7 (260×260 мм)
+                </span>
+              </div>
+              <p class="text-xs text-gray-400 mt-0.5">
+                Зажми и крути мышкой или пальцем · Наведи на узел для точного отклонения Z в мм
+              </p>
+            </div>
+
+            <!-- Mesh Profile Switcher -->
+            <div class="flex flex-wrap items-center gap-1.5">
+              <select id="meshProfileSelect" aria-label="Профиль калибровки стола"
+                class="bg-gray-900 border border-gray-700 rounded-xl px-2.5 py-1.5 text-xs font-mono text-gray-200 focus:outline-none focus:border-orange-500">
+                <option value="flat">Текущий замер LeviQ 3.0 (Δ 0.142 мм — Идеал)</option>
+                <option value="dome">Тепловой купол в центре 90°C (Δ 0.310 мм)</option>
+                <option value="tilt">Перекос оси X до калибровки (Δ 0.485 мм)</option>
+              </select>
+
+              <button id="toggleZeroPlaneBtn" type="button"
+                class="px-2.5 py-1.5 rounded-xl text-xs font-mono bg-cyan-500/20 text-cyan-300 border border-cyan-500/40 transition">
+                Плоскость Z=0: ВКЛ
+              </button>
+            </div>
+          </div>
+
+          <!-- 3D Isometric Surface Canvas -->
+          <div class="relative rounded-xl overflow-hidden bg-gray-950 border border-gray-800 h-80 sm:h-96 w-full select-none">
+            <canvas id="bedMesh3DCanvas" class="w-full h-full block cursor-grab active:cursor-grabbing"></canvas>
+
+            <!-- Color Scale Legend Bar -->
+            <div class="absolute top-3 right-3 bg-gray-900/85 backdrop-blur-sm border border-gray-800 rounded-xl p-2.5 flex flex-col items-center gap-1 pointer-events-none">
+              <span class="text-[10px] font-mono text-red-400 font-bold">+0.25 мм</span>
+              <div class="w-3 h-28 rounded-full bg-gradient-to-b from-red-500 via-emerald-400 to-blue-500 border border-white/10"></div>
+              <span class="text-[10px] font-mono text-blue-400 font-bold">-0.25 мм</span>
+            </div>
+
+            <!-- Hover Probe Point Readout -->
+            <div id="meshHoverBadge" class="absolute bottom-3 left-3 px-3 py-1.5 rounded-xl bg-black/80 backdrop-blur-sm border border-gray-700 text-xs font-mono text-gray-200 pointer-events-none">
+              Узел [4, 4] (X: 130мм, Y: 130мм) → Z: +0.024 мм
+            </div>
+
+            <!-- Rotation & Scale Sliders Overlay -->
+            <div class="absolute bottom-3 right-3 flex items-center gap-2 bg-black/75 backdrop-blur-sm px-2.5 py-1.5 rounded-xl border border-gray-800 text-[11px] font-mono text-gray-300">
+              <span>Масштаб Z:</span>
+              <input id="meshZScaleRange" type="range" min="1" max="5" step="0.5" value="2.5" aria-label="Масштаб Z" class="w-16 accent-orange-500" />
+            </div>
+          </div>
+        </div>
+
+        <!-- Right 5 Cols: 2D 7x7 Heatmap Matrix + Mesh Statistics (Mainsail / Klipper style) -->
+        <div class="lg:col-span-5 space-y-4">
+          
+          <!-- Mesh Statistics Card -->
+          <div class="glass-card rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between border-b border-gray-800 pb-2.5">
+              <div>
+                <h3 class="text-sm font-bold text-white">Метрики геометрии стола (260×260 мм)</h3>
+                <p class="text-xs text-gray-400">Фрезерованная алюминиевая плита 13 мм + PEI</p>
+              </div>
+              <span id="meshGradeBadge" class="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                ОТЛИЧНО
+              </span>
+            </div>
+
+            <div class="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+              <div class="bg-gray-900/80 rounded-xl p-2.5 border border-gray-800">
+                <div class="text-[10px] text-gray-400">Разброс (Δ Range)</div>
+                <div id="meshStatRange" class="text-sm font-mono font-extrabold text-emerald-400 mt-0.5">0.142 мм</div>
+              </div>
+              <div class="bg-gray-900/80 rounded-xl p-2.5 border border-gray-800">
+                <div class="text-[10px] text-gray-400">Пик (Max Z)</div>
+                <div id="meshStatMax" class="text-sm font-mono font-bold text-red-400 mt-0.5">+0.078 мм</div>
+              </div>
+              <div class="bg-gray-900/80 rounded-xl p-2.5 border border-gray-800">
+                <div class="text-[10px] text-gray-400">Впадина (Min Z)</div>
+                <div id="meshStatMin" class="text-sm font-mono font-bold text-blue-400 mt-0.5">-0.064 мм</div>
+              </div>
+              <div class="bg-gray-900/80 rounded-xl p-2.5 border border-gray-800">
+                <div class="text-[10px] text-gray-400">Отклонение (σ)</div>
+                <div id="meshStatSigma" class="text-sm font-mono font-bold text-cyan-300 mt-0.5">0.032 мм</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 2D 7x7 Numeric Matrix Card -->
+          <div class="glass-card rounded-2xl p-4 space-y-3">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-white">2D Матрица точек замера (7×7)</h3>
+                <p class="text-xs text-gray-400">Кликни по ячейке для выделения точки на 3D-сетке</p>
+              </div>
+              <span class="text-[11px] font-mono text-gray-400">Шаг: 38.3 мм</span>
+            </div>
+
+            <div id="mesh2DGridContainer" class="grid grid-cols-7 gap-1 font-mono text-[10px] sm:text-[11px]">
+              <!-- Populated dynamically by JS -->
+            </div>
+
+            <div class="text-[11px] text-gray-400 bg-gray-900/70 border border-gray-800 rounded-xl p-2.5 leading-relaxed">
+              <strong class="text-gray-200">Как это работает на Kobra X:</strong> прошивка K4Pro строит сетку <code class="text-orange-400 font-mono">7×7</code> тензодатчиком сопла перед печатью (или при включенной опции <em>Bed Leveling</em> в старте задания) и компенсирует кривизну по оси Z на лету.
+            </div>
+          </div>
+
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 3: LIVE PACKET SNIFFER ==================== -->
+    <section id="tab-packets" class="hidden space-y-4">
+      <div class="glass-card rounded-2xl p-4 space-y-4">
+        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-gray-800 pb-3">
+          <div>
+            <h2 class="text-base font-bold text-white flex items-center gap-2">
+              <span>Инспектор перехваченных MQTT пакетов</span>
+              <span class="text-xs font-mono px-2 py-0.5 rounded bg-cyan-500/15 text-cyan-300 border border-cyan-500/30">TLS :9883</span>
+            </h2>
+            <p class="text-xs text-gray-400 mt-0.5">
+              Поток JSON-отчетов от локального брокера принтера <code id="snifferIpLabel" class="text-orange-400 font-mono">192.168.1.50:9883</code>
+            </p>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-2">
+            <select id="packetTopicFilter" aria-label="Фильтр топиков"
+              class="bg-gray-900 border border-gray-700 rounded-xl px-3 py-1.5 text-xs font-mono text-gray-200 focus:outline-none focus:border-orange-500">
+              <option value="all">Все топики (All reports)</option>
+              <option value="print">Статус печати (print_report)</option>
+              <option value="temp">Температуры и кулеры (temp_report)</option>
+              <option value="multiColorBox">Многоцветный фидер (ace_report)</option>
+              <option value="camera">RTSP Камера (camera_session)</option>
+            </select>
+
+            <button id="toggleSnifferPauseBtn" type="button"
+              class="px-3 py-1.5 rounded-xl text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-200 border border-gray-700 transition">
+              Пауза лога
+            </button>
+
+            <button id="clearSnifferBtn" type="button"
+              class="px-3 py-1.5 rounded-xl text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-300 border border-gray-700 transition">
+              Очистить
+            </button>
+          </div>
+        </div>
+
+        <!-- Split View: Packet List & Selected JSON Payload -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-4">
+          <div class="lg:col-span-7 bg-gray-950 rounded-xl border border-gray-800 overflow-hidden flex flex-col h-96">
+            <div class="px-3 py-2 bg-gray-900/90 border-b border-gray-800 text-[11px] font-mono text-gray-400 flex justify-between">
+              <span>ВРЕМЯ / ТОПИК MQTT</span>
+              <span>ТИП ПАКЕТА</span>
+            </div>
+            <div id="packetListContainer" class="flex-1 overflow-y-auto divide-y divide-gray-800/60 font-mono text-xs">
+              <!-- Populated dynamically -->
+            </div>
+          </div>
+
+          <div class="lg:col-span-5 bg-gray-950 rounded-xl border border-gray-800 overflow-hidden flex flex-col h-96">
+            <div class="px-3 py-2 bg-gray-900/90 border-b border-gray-800 flex items-center justify-between">
+              <span class="text-[11px] font-mono text-gray-400">ДЕКОДИРОВАННЫЙ JSON PAYLOAD</span>
+              <button id="copyPayloadBtn" type="button" class="text-[11px] font-mono text-cyan-400 hover:text-cyan-300 px-2 py-0.5 rounded bg-gray-800 border border-gray-700">
+                Копировать JSON
+              </button>
+            </div>
+            <pre id="packetPayloadViewer" class="flex-1 p-3 overflow-auto text-xs font-mono text-emerald-300 leading-relaxed select-all"></pre>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ==================== TAB 4: PROTOCOL ARCHITECTURE ==================== -->
+    <section id="tab-protocol" class="hidden space-y-4">
+      <div class="glass-card rounded-2xl p-5 space-y-4">
+        <div>
+          <h2 class="text-base font-bold text-white">Как Anycubic Kobra X (ID: 20030) отдает данные по локальной сети</h2>
+          <p class="text-xs text-gray-400 mt-1">
+            Начиная с базы K4Pro (C++ Klipper порт), принтер использует подписанное рукопожатие в режиме LAN Mode без облака Anycubic Cloud.
+          </p>
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div class="bg-gray-900/80 border border-gray-800 rounded-xl p-4 space-y-2">
+            <div class="text-xs font-mono text-orange-400 font-bold">ШАГ 1 · HTTP Discovery (:18910)</div>
+            <p class="text-xs text-gray-300 leading-relaxed">
+              Клиент обращается на <code class="text-cyan-300 font-mono">GET http://&lt;IP&gt;:18910/info</code>, получает <code class="font-mono">modelId: "20030"</code>, публичные параметры устройства и отправляет подписанный запрос <code class="text-cyan-300 font-mono">POST /ctrl</code>.
+            </p>
+          </div>
+
+          <div class="bg-gray-900/80 border border-gray-800 rounded-xl p-4 space-y-2">
+            <div class="text-xs font-mono text-cyan-400 font-bold">ШАГ 2 · Расшифровка AES-CBC</div>
+            <p class="text-xs text-gray-300 leading-relaxed">
+              Ответ от <code class="font-mono">:18910/ctrl</code> расшифровывается на лету ключом AES-CBC и возвращает локальный логин и пароль к MQTT-брокеру, крутящемуся прямо на самом принтере.
+            </p>
+          </div>
+
+          <div class="bg-gray-900/80 border border-gray-800 rounded-xl p-4 space-y-2">
+            <div class="text-xs font-mono text-emerald-400 font-bold">ШАГ 3 · Поток MQTT TLS (:9883) и RTSP</div>
+            <p class="text-xs text-gray-300 leading-relaxed">
+              Подписка на <code class="text-emerald-300 font-mono">anycubic/anycubicCloud/v1/printer/public/20030/+/report</code>. Принтер пушит JSON с температурами, слоями, статусом 4 слотов фидера и ссылкой на динамический RTSP-поток камеры.
+            </p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <!-- Modal: Python Local LAN Bridge Script (for real hardware connection) -->
+  <div id="bridgeModal" class="fixed inset-0 z-50 hidden bg-black/75 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="glass-card rounded-2xl max-w-2xl w-full p-5 border border-gray-700 space-y-4 max-h-[90vh] flex flex-col">
+      <div class="flex items-center justify-between border-b border-gray-800 pb-3">
+        <div>
+          <h3 class="text-base font-bold text-white">Локальный Python-мост для реального Kobra X</h3>
+          <p class="text-xs text-gray-400">Перехватывает TLS MQTT :9883 с твоего IP и пробрасывает в этот веб-дашборд по WebSocket</p>
+        </div>
+        <button id="closeBridgeModalBtn" type="button" class="px-2.5 py-1 rounded-lg text-xs font-mono bg-gray-800 hover:bg-gray-700 text-gray-300">
+          Закрыть ✕
+        </button>
+      </div>
+
+      <div class="text-xs text-gray-300 space-y-2 overflow-y-auto pr-1">
+        <p>
+          Так как браузеры не умеют напрямую открывать сырые TCP/TLS сокеты на порт <code class="text-orange-400 font-mono">9883</code>, запусти этот микро-скрипт на ПК или в Termux на телефоне в одной Wi-Fi сети с принтером:
+        </p>
+        <div class="relative">
+          <pre id="pythonBridgeCode" class="bg-gray-950 border border-gray-800 rounded-xl p-3 font-mono text-[11px] text-cyan-300 overflow-x-auto leading-relaxed"></pre>
+          <button id="copyBridgeScriptBtn" type="button"
+            class="absolute top-2.5 right-2.5 px-2.5 py-1 rounded-lg text-[11px] font-mono bg-orange-500 hover:bg-orange-600 text-white shadow">
+            Скопировать скрипт
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // ==================== BED MESH PROFILES (7x7 MATRIX, 260x260mm) ====================
+    const MESH_PROFILES = {
+      flat: [
+        [-0.042, -0.028, -0.015,  0.004, -0.011, -0.025, -0.048],
+        [-0.030, -0.012,  0.014,  0.028,  0.010, -0.014, -0.035],
+        [-0.018,  0.008,  0.042,  0.061,  0.038,  0.005, -0.022],
+        [-0.010,  0.019,  0.055,  0.078,  0.051,  0.016, -0.014],
+        [-0.021,  0.006,  0.036,  0.052,  0.033,  0.002, -0.026],
+        [-0.038, -0.016,  0.009,  0.021,  0.006, -0.019, -0.041],
+        [-0.064, -0.039, -0.018, -0.005, -0.020, -0.042, -0.058]
+      ],
+      dome: [
+        [-0.120, -0.085, -0.040, -0.025, -0.045, -0.090, -0.130],
+        [-0.080, -0.020,  0.045,  0.070,  0.040, -0.025, -0.085],
+        [-0.035,  0.040,  0.120,  0.155,  0.115,  0.035, -0.040],
+        [-0.020,  0.065,  0.150,  0.180,  0.145,  0.060, -0.025],
+        [-0.040,  0.035,  0.110,  0.145,  0.105,  0.030, -0.045],
+        [-0.085, -0.025,  0.035,  0.060,  0.030, -0.030, -0.090],
+        [-0.125, -0.090, -0.045, -0.030, -0.050, -0.095, -0.130]
+      ],
+      tilt: [
+        [-0.240, -0.160, -0.080,  0.000,  0.080,  0.160,  0.235],
+        [-0.230, -0.150, -0.070,  0.010,  0.090,  0.170,  0.245],
+        [-0.220, -0.140, -0.060,  0.020,  0.100,  0.180,  0.240],
+        [-0.215, -0.135, -0.055,  0.025,  0.105,  0.185,  0.242],
+        [-0.225, -0.145, -0.065,  0.015,  0.095,  0.175,  0.238],
+        [-0.235, -0.155, -0.075,  0.005,  0.085,  0.165,  0.230],
+        [-0.240, -0.165, -0.085, -0.005,  0.075,  0.155,  0.225]
+      ]
+    };
+
+    // ==================== STATE & CONFIGURATION ====================
+    const appState = {
+      printerIp: '192.168.1.50',
+      wsBridgeUrl: 'ws://192.168.1.50:8765',
+      activeTab: 'dashboard',
+      viewMode: 'camera', // 'camera' | 'map' | 'mesh3d'
+      preset: 'printing', // 'printing' | 'finished' | 'calibrating' | 'error11854' | 'idle'
+      soundEnabled: true,
+      snifferPaused: false,
+      topicFilter: 'all',
+      packetSeq: 1040,
+      packets: [],
+      selectedPacketId: null,
+      wsConnection: null,
+      meshProfile: 'flat',
+      showZeroPlane: true,
+      meshZScale: 2.5,
+      meshRotYaw: -0.68,
+      meshRotPitch: 0.58,
+      selectedMeshCell: { r: 3, c: 3 },
+      telemetry: {
+        state: 'printing',
+        stateLabel: 'ПЕЧАТЬ',
+        jobSubState: 'Печать модели (Слой 142)',
+        speedProfile: 'Standard',
+        fwVersion: 'v1.2.5-K4Pro',
+        nozzleActual: 220.2,
+        nozzleTarget: 220,
+        bedActual: 60.0,
+        bedTarget: 60,
+        progress: 37.4,
+        currentLayer: 142,
+        totalLayers: 380,
+        zHeight: 28.4,
+        fileName: 'Benchy_4Color_ACE_Gen2.gcode.3mf',
+        elapsedSec: 2538,
+        remainingSec: 4245,
+        speedMmS: 480,
+        accelMmS2: 15000,
+        filamentGrams: 34.8,
+        filamentMeters: 11.6,
+        fanPart: 100,
+        fanAux: 80,
+        fanHotend: 100,
+        activeSlot: 1,
+        x: 130.0,
+        y: 130.0,
+        errorCode: null,
+        errorMsg: null,
+        aceBoxTemp: 45,
+        aceBoxHumidity: 16,
+        aceDrying: true,
+        slots: [
+          { id: 1, material: 'PLA+', colorHex: '#f97316', colorName: 'Оранжевый', remain: 84, status: 'В сопле' },
+          { id: 2, material: 'PLA', colorHex: '#06b6d4', colorName: 'Циан', remain: 62, status: 'Готов' },
+          { id: 3, material: 'PETG', colorHex: '#facc15', colorName: 'Желтый', remain: 91, status: 'Готов' },
+          { id: 4, material: 'PLA+', colorHex: '#ec4899', colorName: 'Маджента', remain: 47, status: 'Готов' }
+        ]
+      },
+      trailPoints: []
+    };
+
+    // Load saved IP from localStorage safely
+    try {
+      const savedIp = localStorage.getItem('kobra_x_ip');
+      if (savedIp) {
+        appState.printerIp = savedIp;
+        document.getElementById('printerIpInput').value = savedIp;
+        document.getElementById('wsBridgeInput').value = 'ws://' + savedIp + ':8765';
+      }
+    } catch (e) {
+      // Ignore storage restrictions in sandboxed iframe
+    }
+
+    // ==================== WEB AUDIO API COMPLETION FANFARE ====================
+    let audioCtx = null;
+    function playCompletionFanfare() {
+      if (!appState.soundEnabled) return;
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        if (!audioCtx) audioCtx = new AudioContextClass();
+        if (audioCtx.state === 'suspended') audioCtx.resume();
+
+        // Play a pleasant 4-note chord arpeggio (C5 - E5 - G5 - C6)
+        const notes = [523.25, 659.25, 783.99, 1046.50];
+        notes.forEach((freq, idx) => {
+          const osc = audioCtx.createOscillator();
+          const gain = audioCtx.createGain();
+          osc.type = 'triangle';
+          osc.frequency.setValueAtTime(freq, audioCtx.currentTime + idx * 0.13);
+
+          gain.gain.setValueAtTime(0.001, audioCtx.currentTime + idx * 0.13);
+          gain.gain.exponentialRampToValueAtTime(0.22, audioCtx.currentTime + idx * 0.13 + 0.03);
+          gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + idx * 0.13 + 0.45);
+
+          osc.connect(gain);
+          gain.connect(audioCtx.destination);
+          osc.start(audioCtx.currentTime + idx * 0.13);
+          osc.stop(audioCtx.currentTime + idx * 0.13 + 0.48);
+        });
+      } catch (e) {
+        // Ignore audio restrictions if not yet interacted
+      }
+    }
+
+    function triggerPrintFinishedNotification() {
+      const t = appState.telemetry;
+      const banner = document.getElementById('printFinishedBanner');
+      banner.classList.remove('hidden');
+      document.getElementById('finishedSummaryText').textContent =
+        `Файл: ${t.fileName} · Слоев: ${t.totalLayers}/${t.totalLayers} · Время: ${formatDuration(t.elapsedSec)} · Расход: ${t.filamentGrams.toFixed(1)} г`;
+      document.getElementById('finishedBedSafetyBadge').textContent =
+        t.bedActual <= 40
+          ? `Стол остыл (${t.bedActual.toFixed(1)}°C) — деталь можно снимать!`
+          : `Стол еще горячий (${t.bedActual.toFixed(1)}°C) — подожди остывания`;
+
+      playCompletionFanfare();
+      showToast(`🎉 Печать ${t.fileName} завершена на 100%!`, 'success');
+
+      // Native Android APK Notification if running inside APK
+      try {
+        if (window.AndroidKobraBridge && typeof window.AndroidKobraBridge.notifyPrintFinished === 'function') {
+          window.AndroidKobraBridge.notifyPrintFinished(t.fileName, String(t.totalLayers), `${t.bedActual.toFixed(1)}°C`);
+        }
+      } catch (e) {}
+
+      // Browser Notification API if permitted
+      try {
+        if ('Notification' in window && Notification.permission === 'granted') {
+          new Notification('Anycubic Kobra X — Печать завершена!', {
+            body: `${t.fileName} (100%, ${t.totalLayers} слоев). Стол: ${t.bedActual.toFixed(1)}°C.`
+          });
+        }
+      } catch (e) {}
+    }
+
+    // ==================== TOAST HELPER ====================
+    function showToast(message, tone = 'info') {
+      const container = document.getElementById('toastContainer');
+      const toast = document.createElement('div');
+      const borderCol = tone === 'success' ? 'border-emerald-500/60 text-emerald-200' :
+                        tone === 'warn' ? 'border-amber-500/60 text-amber-200' :
+                        'border-cyan-500/60 text-cyan-200';
+      toast.className = `px-4 py-2.5 rounded-xl bg-gray-900/95 border ${borderCol} shadow-xl text-xs font-medium transition-all duration-300 pointer-events-auto`;
+      toast.textContent = message;
+      container.appendChild(toast);
+      setTimeout(() => {
+        toast.style.opacity = '0';
+        setTimeout(() => toast.remove(), 300);
+      }, 3400);
+    }
+
+    // ==================== CLIPBOARD HELPER ====================
+    function copyTextSafe(text, successMsg) {
+      const fallbackCopy = () => {
+        const ta = document.createElement('textarea');
+        ta.value = text;
+        ta.style.position = 'fixed';
+        ta.style.opacity = '0';
+        document.body.appendChild(ta);
+        ta.select();
+        try {
+          document.execCommand('copy');
+          showToast(successMsg, 'success');
+        } catch (err) {
+          showToast('Не удалось скопировать в буфер', 'warn');
+        }
+        ta.remove();
+      };
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => showToast(successMsg, 'success')).catch(fallbackCopy);
+      } else {
+        fallbackCopy();
+      }
+    }
+
+    // ==================== CHART.JS INITIALIZATION ====================
+    let tempChart = null;
+    function initTemperatureChart() {
+      const ctx = document.getElementById('tempChartCanvas').getContext('2d');
+      const labels = [];
+      const nozzleData = [];
+      const bedData = [];
+      const now = new Date();
+      for (let i = 19; i >= 0; i--) {
+        const t = new Date(now.getTime() - i * 2000);
+        labels.push(t.toTimeString().slice(0, 8));
+        nozzleData.push(220 + (Math.random() - 0.5) * 0.8);
+        bedData.push(60 + (Math.random() - 0.5) * 0.3);
+      }
+
+      if (typeof Chart !== 'undefined') {
+        tempChart = new Chart(ctx, {
+          type: 'line',
+          data: {
+            labels,
+            datasets: [
+              {
+                label: 'Сопло (°C)',
+                data: nozzleData,
+                borderColor: '#f97316',
+                backgroundColor: 'rgba(249, 115, 22, 0.12)',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.35,
+                fill: true
+              },
+              {
+                label: 'Стол (°C)',
+                data: bedData,
+                borderColor: '#06b6d4',
+                backgroundColor: 'rgba(6, 182, 212, 0.10)',
+                borderWidth: 2,
+                pointRadius: 0,
+                tension: 0.35,
+                fill: true
+              }
+            ]
+          },
+          options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            animation: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: {
+              legend: { display: false },
+              tooltip: {
+                backgroundColor: '#111827',
+                borderColor: '#374151',
+                borderWidth: 1,
+                titleColor: '#9ca3af',
+                bodyColor: '#f9fafb'
+              }
+            },
+            scales: {
+              x: {
+                ticks: { color: '#6b7280', font: { family: 'JetBrains Mono', size: 10 }, maxTicksLimit: 6 },
+                grid: { color: 'rgba(55, 65, 81, 0.25)' }
+              },
+              y: {
+                min: 0,
+                max: 260,
+                ticks: { color: '#6b7280', font: { family: 'JetBrains Mono', size: 10 }, stepSize: 50 },
+                grid: { color: 'rgba(55, 65, 81, 0.25)' }
+              }
+            }
+          }
+        });
+      }
+    }
+
+    // ==================== COLOR MAP HELPER FOR BED MESH ====================
+    function zValueToColor(z, alpha = 1) {
+      // Map z in [-0.25, +0.25] to Blue -> Cyan -> Emerald -> Amber -> Red
+      const norm = Math.max(0, Math.min(1, (z + 0.25) / 0.50));
+      let r, g, b;
+      if (norm < 0.25) {
+        const k = norm / 0.25;
+        r = Math.round(37 + k * (6 - 37));
+        g = Math.round(99 + k * (182 - 99));
+        b = Math.round(235 + k * (212 - 235));
+      } else if (norm < 0.5) {
+        const k = (norm - 0.25) / 0.25;
+        r = Math.round(6 + k * (16 - 6));
+        g = Math.round(182 + k * (185 - 182));
+        b = Math.round(212 + k * (129 - 212));
+      } else if (norm < 0.75) {
+        const k = (norm - 0.5) / 0.25;
+        r = Math.round(16 + k * (245 - 16));
+        g = Math.round(185 + k * (158 - 185));
+        b = Math.round(129 + k * (11 - 129));
+      } else {
+        const k = (norm - 0.75) / 0.25;
+        r = Math.round(245 + k * (239 - 245));
+        g = Math.round(158 + k * (68 - 158));
+        b = Math.round(11 + k * (68 - 11));
+      }
+      return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+    }
+
+    // ==================== RENDER 2D BED MESH MATRIX & STATS ====================
+    function renderBedMesh2DAndStats() {
+      const grid = MESH_PROFILES[appState.meshProfile] || MESH_PROFILES.flat;
+      const flatVals = grid.flat();
+      const maxZ = Math.max(...flatVals);
+      const minZ = Math.min(...flatVals);
+      const rangeZ = maxZ - minZ;
+      const mean = flatVals.reduce((a, b) => a + b, 0) / flatVals.length;
+      const sigma = Math.sqrt(flatVals.reduce((acc, v) => acc + Math.pow(v - mean, 2), 0) / flatVals.length);
+
+      document.getElementById('meshStatRange').textContent = `${rangeZ.toFixed(3)} мм`;
+      document.getElementById('meshStatMax').textContent = `${maxZ >= 0 ? '+' : ''}${maxZ.toFixed(3)} мм`;
+      document.getElementById('meshStatMin').textContent = `${minZ >= 0 ? '+' : ''}${minZ.toFixed(3)} мм`;
+      document.getElementById('meshStatSigma').textContent = `${sigma.toFixed(3)} мм`;
+      document.getElementById('openMeshTabQuickBtn').textContent = `Карта стола Δ ${rangeZ.toFixed(2)}мм →`;
+
+      const gradeBadge = document.getElementById('meshGradeBadge');
+      if (rangeZ < 0.20) {
+        gradeBadge.textContent = 'ИДЕАЛЬНО (<0.2мм)';
+        gradeBadge.className = 'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/40';
+      } else if (rangeZ < 0.35) {
+        gradeBadge.textContent = 'НОРМА (LeviQ компенсирует)';
+        gradeBadge.className = 'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-amber-500/20 text-amber-300 border border-amber-500/40';
+      } else {
+        gradeBadge.textContent = 'ПЕРЕКОС ОСИ X';
+        gradeBadge.className = 'px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-red-500/20 text-red-300 border border-red-500/40';
+      }
+
+      const container = document.getElementById('mesh2DGridContainer');
+      const cellsHtml = [];
+      for (let r = 0; r < 7; r++) {
+        for (let c = 0; c < 7; c++) {
+          const val = grid[r][c];
+          const isSel = appState.selectedMeshCell.r === r && appState.selectedMeshCell.c === c;
+          const bg = zValueToColor(val, 0.28);
+          const border = isSel ? 'border-white ring-1 ring-white' : 'border-gray-800 hover:border-gray-500';
+          cellsHtml.push(`
+            <button type="button" data-r="${r}" data-c="${c}"
+              style="background:${bg}"
+              class="mesh-cell-btn rounded-lg py-2 px-1 border ${border} text-center font-mono transition flex flex-col items-center justify-center">
+              <span class="text-white font-semibold">${val >= 0 ? '+' : ''}${val.toFixed(2)}</span>
+            </button>
+          `);
+        }
+      }
+      container.innerHTML = cellsHtml.join('');
+
+      const selR = appState.selectedMeshCell.r;
+      const selC = appState.selectedMeshCell.c;
+      const selVal = grid[selR][selC];
+      const xMm = Math.round(15 + selC * (230 / 6));
+      const yMm = Math.round(15 + (6 - selR) * (230 / 6));
+      document.getElementById('meshHoverBadge').textContent =
+        `Узел [${selR + 1}, ${selC + 1}] (X: ${xMm}мм, Y: ${yMm}мм) → Z: ${selVal >= 0 ? '+' : ''}${selVal.toFixed(3)} мм`;
+    }
+
+    // ==================== RENDER 3D ISOMETRIC BED MESH SURFACE ====================
+    function draw3DBedMeshOnCanvas(canvas) {
+      if (!canvas) return;
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width < 10 || rect.height < 10) return;
+      if (canvas.width !== Math.floor(rect.width) || canvas.height !== Math.floor(rect.height)) {
+        canvas.width = Math.max(300, Math.floor(rect.width));
+        canvas.height = Math.max(180, Math.floor(rect.height));
+      }
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      ctx.clearRect(0, 0, w, h);
+
+      // Dark technical backdrop
+      const grad = ctx.createLinearGradient(0, 0, 0, h);
+      grad.addColorStop(0, '#070b12');
+      grad.addColorStop(1, '#0f172a');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, w, h);
+
+      const grid = MESH_PROFILES[appState.meshProfile] || MESH_PROFILES.flat;
+      const yaw = appState.meshRotYaw;
+      const pitch = appState.meshRotPitch;
+      const scale = Math.min(w, h) * 0.088;
+      const zExaggeration = appState.meshZScale * 120;
+      const cx = w * 0.48;
+      const cy = h * 0.54;
+
+      function project3D(gx, gy, gz) {
+        // Center grid around (0,0) for gx, gy in [-3..+3]
+        const x0 = gx * scale;
+        const y0 = gy * scale;
+        const z0 = gz * zExaggeration;
+
+        const cosY = Math.cos(yaw), sinY = Math.sin(yaw);
+        const cosP = Math.cos(pitch), sinP = Math.sin(pitch);
+
+        const x1 = x0 * cosY - y0 * sinY;
+        const y1 = x0 * sinY + y0 * cosY;
+
+        const sx = cx + x1;
+        const sy = cy + y1 * sinP - z0 * cosP;
+        return { x: sx, y: sy };
+      }
+
+      // Optional Z=0 Reference Plane
+      if (appState.showZeroPlane) {
+        const p00 = project3D(-3, -3, 0);
+        const p10 = project3D(3, -3, 0);
+        const p11 = project3D(3, 3, 0);
+        const p01 = project3D(-3, 3, 0);
+        ctx.save();
+        ctx.fillStyle = 'rgba(148, 163, 184, 0.07)';
+        ctx.strokeStyle = 'rgba(6, 182, 212, 0.35)';
+        ctx.setLineDash([4, 4]);
+        ctx.lineWidth = 1.2;
+        ctx.beginPath();
+        ctx.moveTo(p00.x, p00.y);
+        ctx.lineTo(p10.x, p10.y);
+        ctx.lineTo(p11.x, p11.y);
+        ctx.lineTo(p01.x, p01.y);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+        ctx.restore();
+      }
+
+      // Draw surface quads from back to front
+      for (let r = 0; r < 6; r++) {
+        for (let c = 0; c < 6; c++) {
+          const z00 = grid[r][c];
+          const z10 = grid[r][c + 1];
+          const z11 = grid[r + 1][c + 1];
+          const z01 = grid[r + 1][c];
+          const avgZ = (z00 + z10 + z11 + z01) / 4;
+
+          const v00 = project3D(c - 3, r - 3, z00);
+          const v10 = project3D(c - 2, r - 3, z10);
+          const v11 = project3D(c - 2, r - 2, z11);
+          const v01 = project3D(c - 3, r - 2, z01);
+
+          ctx.fillStyle = zValueToColor(avgZ, 0.62);
+          ctx.strokeStyle = 'rgba(255, 255, 255, 0.28)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(v00.x, v00.y);
+          ctx.lineTo(v10.x, v10.y);
+          ctx.lineTo(v11.x, v11.y);
+          ctx.lineTo(v01.x, v01.y);
+          ctx.closePath();
+          ctx.fill();
+          ctx.stroke();
+        }
+      }
+
+      // Draw probe nodes and highlight selected node
+      for (let r = 0; r < 7; r++) {
+        for (let c = 0; c < 7; c++) {
+          const z = grid[r][c];
+          const pt = project3D(c - 3, r - 3, z);
+          const isSel = appState.selectedMeshCell.r === r && appState.selectedMeshCell.c === c;
+          ctx.beginPath();
+          ctx.arc(pt.x, pt.y, isSel ? 5.5 : 2.5, 0, Math.PI * 2);
+          ctx.fillStyle = isSel ? '#ffffff' : zValueToColor(z, 1);
+          ctx.fill();
+          if (isSel) {
+            ctx.strokeStyle = '#f97316';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+          }
+        }
+      }
+
+      // Axis labels at corners
+      const frontLeft = project3D(-3, 3, 0);
+      const frontRight = project3D(3, 3, 0);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '10px "JetBrains Mono", monospace';
+      ctx.fillText('X:0 Y:0', frontLeft.x - 18, frontLeft.y + 14);
+      ctx.fillText('X:260', frontRight.x - 12, frontRight.y + 14);
+    }
+
+    // ==================== RENDER FILAMENT SLOTS ====================
+    function renderFilamentSlots() {
+      const container = document.getElementById('filamentSlotsGrid');
+      const t = appState.telemetry;
+      container.innerHTML = t.slots.map(slot => {
+        const isLoaded = t.activeSlot === slot.id;
+        const isErr = t.errorCode === 11854 && slot.id === 4;
+        const ringClass = isErr
+          ? 'border-red-500 bg-red-950/30'
+          : isLoaded
+            ? 'border-orange-500 bg-orange-500/10 shadow-md shadow-orange-500/10'
+            : 'border-gray-800 bg-gray-900/70';
+
+        return `
+          <div class="rounded-xl p-2.5 border ${ringClass} transition flex flex-col justify-between">
+            <div class="flex items-center justify-between">
+              <span class="text-[11px] font-mono font-bold text-gray-300">Слот #${slot.id}</span>
+              <span class="w-3.5 h-3.5 rounded-full border border-white/30 shadow-sm" style="background:${slot.colorHex}"></span>
+            </div>
+            <div class="mt-2">
+              <div class="text-xs font-bold text-white">${slot.material}</div>
+              <div class="text-[10px] text-gray-400 truncate">${slot.colorName}</div>
+            </div>
+            <div class="mt-2">
+              <div class="flex justify-between text-[10px] font-mono mb-1">
+                <span class="${isErr ? 'text-red-400 font-bold' : isLoaded ? 'text-orange-400 font-semibold' : 'text-gray-400'}">${slot.status}</span>
+                <span class="text-gray-300">${slot.remain}%</span>
+              </div>
+              <div class="w-full bg-gray-800 h-1 rounded-full overflow-hidden">
+                <div class="h-full rounded-full" style="width:${slot.remain}%; background:${slot.colorHex}"></div>
+              </div>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // ==================== FORMAT SECONDS ====================
+    function formatDuration(sec) {
+      const s = Math.max(0, Math.floor(sec));
+      const hrs = String(Math.floor(s / 3600)).padStart(2, '0');
+      const mins = String(Math.floor((s % 3600) / 60)).padStart(2, '0');
+      const secs = String(s % 60).padStart(2, '0');
+      return `${hrs}:${mins}:${secs}`;
+    }
+
+    // ==================== UPDATE DASHBOARD UI ====================
+    function updateDashboardUI() {
+      const t = appState.telemetry;
+      document.getElementById('activeIpDisplay').textContent = `IP: ${appState.printerIp}`;
+      document.getElementById('snifferIpLabel').textContent = `${appState.printerIp}:9883`;
+      document.getElementById('rtspUrlDisplay').textContent =
+        `Поток из сессии: rtsp://${appState.printerIp}:554/live/0?token=kx_98a2f`;
+
+      // Alert banner
+      const alertBanner = document.getElementById('printerAlertBanner');
+      if (t.errorCode) {
+        alertBanner.classList.remove('hidden');
+        document.getElementById('alertTitle').textContent = `Код ошибки принтера: ${t.errorCode} (Сбой ретракта канала #4)`;
+        document.getElementById('alertDesc').textContent = t.errorMsg;
+      } else {
+        alertBanner.classList.add('hidden');
+      }
+
+      // State badge
+      const badge = document.getElementById('stateBadgePill');
+      badge.textContent = t.stateLabel;
+      if (t.state === 'printing') {
+        badge.className = 'px-2 py-0.5 text-[11px] font-bold rounded-full bg-emerald-500/20 text-emerald-400 border border-emerald-500/30';
+      } else if (t.state === 'finished') {
+        badge.className = 'px-2 py-0.5 text-[11px] font-bold rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/40';
+      } else if (t.state === 'calibrating') {
+        badge.className = 'px-2 py-0.5 text-[11px] font-bold rounded-full bg-cyan-500/20 text-cyan-300 border border-cyan-500/30';
+      } else if (t.state === 'error') {
+        badge.className = 'px-2 py-0.5 text-[11px] font-bold rounded-full bg-red-500/20 text-red-400 border border-red-500/40';
+      } else {
+        badge.className = 'px-2 py-0.5 text-[11px] font-bold rounded-full bg-gray-700 text-gray-300 border border-gray-600';
+      }
+
+      document.getElementById('currentJobStateText').textContent = t.jobSubState;
+      document.getElementById('speedProfileBadge').textContent = t.speedProfile;
+
+      // Temperatures
+      document.getElementById('nozzleTempCurrent').textContent = `${t.nozzleActual.toFixed(1)}°C`;
+      document.getElementById('nozzleTempTarget').textContent = t.nozzleTarget;
+      const nozzlePct = Math.min(100, Math.round((t.nozzleActual / 300) * 100));
+      document.getElementById('nozzleTempBar').style.width = `${nozzlePct}%`;
+      document.getElementById('nozzleHeatBadge').textContent =
+        t.nozzleTarget > 0 ? `Мощность ${Math.min(99, Math.max(15, Math.round((t.nozzleTarget / 300) * 100)))}%` : 'Нагрев ВЫКЛ';
+
+      document.getElementById('bedTempCurrent').textContent = `${t.bedActual.toFixed(1)}°C`;
+      document.getElementById('bedTempTarget').textContent = t.bedTarget;
+      const bedPct = Math.min(100, Math.round((t.bedActual / 100) * 100));
+      document.getElementById('bedTempBar').style.width = `${bedPct}%`;
+      document.getElementById('bedHeatBadge').textContent =
+        t.bedTarget > 0 ? 'ПИД Стабильно' : 'Остывание';
+
+      // Progress & Layers
+      document.getElementById('layerCounterBadge').textContent = `Слой ${t.currentLayer} / ${t.totalLayers}`;
+      document.getElementById('printProgressPct').textContent = `${t.progress.toFixed(1)}%`;
+      document.getElementById('printProgressBar').style.width = `${t.progress}%`;
+      document.getElementById('zHeightText').textContent = `Z: ${t.zHeight.toFixed(2)} мм`;
+
+      // Job metadata
+      document.getElementById('jobFileName').textContent = t.fileName;
+      document.getElementById('jobElapsedText').textContent = formatDuration(t.elapsedSec);
+      document.getElementById('jobRemainingText').textContent = formatDuration(t.remainingSec);
+
+      const finishDate = new Date(Date.now() + t.remainingSec * 1000);
+      document.getElementById('jobEtaText').textContent =
+        (t.state === 'idle' || t.state === 'finished') ? 'ГОТОВО' : finishDate.toTimeString().slice(0, 5);
+
+      document.getElementById('telemetrySpeedVal').textContent = `${t.speedMmS} мм/с`;
+      document.getElementById('telemetryAccelVal').textContent = `${t.accelMmS2.toLocaleString('ru-RU')} мм/с²`;
+      document.getElementById('telemetryFilamentVal').textContent = `${t.filamentGrams.toFixed(1)} г / ${t.filamentMeters.toFixed(1)} м`;
+
+      // Active slot
+      document.getElementById('activeSlotBadge').textContent =
+        t.activeSlot > 0 ? `В сопле: Слот #${t.activeSlot}` : 'В сопле: Пусто (-1)';
+
+      // Fans
+      document.getElementById('fanPartVal').textContent = `${t.fanPart}%`;
+      document.getElementById('fanPartBar').style.width = `${t.fanPart}%`;
+      document.getElementById('fanAuxVal').textContent = `${t.fanAux}%`;
+      document.getElementById('fanAuxBar').style.width = `${t.fanAux}%`;
+      document.getElementById('fanHotendVal').textContent = `${t.fanHotend}%`;
+      document.getElementById('fanHotendBar').style.width = `${t.fanHotend}%`;
+
+      // HUD overlays
+      document.getElementById('hudCoordsBadge').textContent =
+        `X: ${t.x.toFixed(1)}  Y: ${t.y.toFixed(1)}  Z: ${t.zHeight.toFixed(1)}`;
+      document.getElementById('hudSpeedBadge').textContent =
+        `${t.speedMmS} мм/с · ${(t.state === 'idle' || t.state === 'finished') ? '18 Вт ожидание' : '380–1450 Вт'}`;
+
+      if (t.state === 'finished') {
+        document.getElementById('hudCameraNotice').textContent =
+          'Печать завершена (100%) · Парковка головы X:0 Y:260 · Стол остывает';
+      } else if (t.zHeight < 40 && t.state !== 'idle') {
+        document.getElementById('hudCameraNotice').textContent =
+          'Высота < 45мм: голова Kobra X частично перекрывает обзор первых слоев';
+      } else {
+        document.getElementById('hudCameraNotice').textContent =
+          'Камера 720p (10 кадр/с) · AI Spaghetti Detection: Активен';
+      }
+
+      renderFilamentSlots();
+    }
+
+    // ==================== PACKET SNIFFER GENERATOR ====================
+    function pushInterceptedPacket(topicSuffix, category, payloadObj) {
+      if (appState.snifferPaused) return;
+      appState.packetSeq += 1;
+      const now = new Date();
+      const timeStr = now.toTimeString().slice(0, 8) + '.' + String(now.getMilliseconds()).padStart(3, '0');
+      const fullTopic = `anycubic/anycubicCloud/v1/printer/public/20030/kx_${appState.printerIp.replace(/\./g, '_')}/${topicSuffix}`;
+
+      const pkt = {
+        id: appState.packetSeq,
+        time: timeStr,
+        topic: fullTopic,
+        shortTopic: topicSuffix,
+        category,
+        payload: payloadObj
+      };
+
+      appState.packets.unshift(pkt);
+      if (appState.packets.length > 60) {
+        appState.packets.pop();
+      }
+      if (!appState.selectedPacketId) {
+        appState.selectedPacketId = pkt.id;
+      }
+
+      document.getElementById('packetCountBadge').textContent = String(appState.packets.length);
+      renderPacketList();
+    }
+
+    function renderPacketList() {
+      const container = document.getElementById('packetListContainer');
+      const filtered = appState.packets.filter(p =>
+        appState.topicFilter === 'all' || p.category === appState.topicFilter
+      );
+
+      container.innerHTML = filtered.map(pkt => {
+        const isSelected = pkt.id === appState.selectedPacketId;
+        const rowBg = isSelected ? 'bg-orange-500/15 text-white' : 'hover:bg-gray-900/80 text-gray-300';
+        return `
+          <button type="button" data-pkt-id="${pkt.id}" class="pkt-row-btn w-full text-left px-3 py-2 flex items-center justify-between gap-2 transition ${rowBg}">
+            <div class="truncate">
+              <span class="text-gray-500 mr-2">[${pkt.time}]</span>
+              <span class="text-cyan-400 font-semibold">${pkt.shortTopic}</span>
+              <span class="text-gray-500 text-[10px] ml-1.5">${pkt.topic}</span>
+            </div>
+            <span class="px-1.5 py-0.5 rounded text-[10px] bg-gray-800 text-gray-300 border border-gray-700 shrink-0">
+              #${pkt.id}
+            </span>
+          </button>
+        `;
+      }).join('');
+
+      const activePkt = appState.packets.find(p => p.id === appState.selectedPacketId) || filtered[0];
+      const viewer = document.getElementById('packetPayloadViewer');
+      if (activePkt) {
+        viewer.textContent = JSON.stringify(activePkt.payload, null, 2);
+      } else {
+        viewer.textContent = '// Нет пакетов для выбранного фильтра';
+      }
+    }
+
+    // ==================== APPLY PRESET SCENARIOS ====================
+    function applyPreset(presetName) {
+      appState.preset = presetName;
+      const t = appState.telemetry;
+
+      document.querySelectorAll('.preset-btn').forEach(btn => {
+        if (btn.dataset.preset === presetName) {
+          btn.className = 'preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/40 transition whitespace-nowrap';
+        } else {
+          btn.className = 'preset-btn px-2.5 py-1 rounded-lg text-[11px] font-medium bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-700 transition whitespace-nowrap';
+        }
+      });
+
+      if (presetName !== 'finished') {
+        document.getElementById('printFinishedBanner').classList.add('hidden');
+      }
+
+      if (presetName === 'printing') {
+        t.state = 'printing';
+        t.stateLabel = 'ПЕЧАТЬ';
+        t.jobSubState = 'Печать 4 цвета (ACE GEN 2)';
+        t.speedProfile = 'Standard';
+        t.nozzleActual = 220.2;
+        t.nozzleTarget = 220;
+        t.bedActual = 60.0;
+        t.bedTarget = 60;
+        t.progress = 37.4;
+        t.currentLayer = 142;
+        t.totalLayers = 380;
+        t.zHeight = 28.4;
+        t.speedMmS = 480;
+        t.accelMmS2 = 15000;
+        t.fanPart = 100;
+        t.fanAux = 80;
+        t.activeSlot = 1;
+        t.errorCode = null;
+        t.slots[0].status = 'В сопле';
+        t.slots[3].status = 'Готов';
+        updateDashboardUI();
+        showToast(`Режим телеметрии: ${t.stateLabel}`, 'info');
+      } else if (presetName === 'finished') {
+        t.state = 'finished';
+        t.stateLabel = 'ЗАВЕРШЕНО 100%';
+        t.jobSubState = 'Печать успешно окончена!';
+        t.speedProfile = 'Standard';
+        t.nozzleActual = 38.0;
+        t.nozzleTarget = 0;
+        t.bedActual = 36.5;
+        t.bedTarget = 0;
+        t.progress = 100.0;
+        t.currentLayer = 380;
+        t.totalLayers = 380;
+        t.zHeight = 76.0;
+        t.elapsedSec = 6783;
+        t.remainingSec = 0;
+        t.speedMmS = 0;
+        t.accelMmS2 = 0;
+        t.filamentGrams = 93.2;
+        t.filamentMeters = 31.1;
+        t.fanPart = 0;
+        t.fanAux = 0;
+        t.fanHotend = 0;
+        t.x = 0.0;
+        t.y = 260.0;
+        t.activeSlot = -1;
+        t.errorCode = null;
+        t.slots.forEach(s => { s.status = 'Готов'; });
+        updateDashboardUI();
+        triggerPrintFinishedNotification();
+      } else if (presetName === 'calibrating') {
+        t.state = 'calibrating';
+        t.stateLabel = 'КАЛИБРОВКА';
+        t.jobSubState = 'LeviQ 3.0 (7×7) + 1-й слой';
+        t.speedProfile = 'Silent';
+        t.nozzleActual = 215.0;
+        t.nozzleTarget = 215;
+        t.bedActual = 65.0;
+        t.bedTarget = 65;
+        t.progress = 0.8;
+        t.currentLayer = 1;
+        t.totalLayers = 380;
+        t.zHeight = 0.20;
+        t.speedMmS = 80;
+        t.accelMmS2 = 5000;
+        t.fanPart = 0;
+        t.fanAux = 0;
+        t.activeSlot = 2;
+        t.errorCode = null;
+        t.slots[0].status = 'Готов';
+        t.slots[1].status = 'В сопле';
+        t.slots[3].status = 'Готов';
+        updateDashboardUI();
+        showToast(`Режим телеметрии: ${t.stateLabel}`, 'info');
+      } else if (presetName === 'error11854') {
+        t.state = 'error';
+        t.stateLabel = 'ПАУЗА / ОШИБКА';
+        t.jobSubState = 'Ошибка ретракта (Канал #4)';
+        t.speedProfile = 'Standard';
+        t.nozzleActual = 180.0;
+        t.nozzleTarget = 180;
+        t.bedActual = 60.0;
+        t.bedTarget = 60;
+        t.speedMmS = 0;
+        t.accelMmS2 = 0;
+        t.fanPart = 40;
+        t.fanAux = 0;
+        t.activeSlot = 4;
+        t.errorCode = 11854;
+        t.errorMsg = 'Сбой втягивания (retraction failure) в канале #4 при смене цвета. Перезагрузите нить в 4-м слоте фидера на самом принтере.';
+        t.slots[0].status = 'Готов';
+        t.slots[3].status = 'Ошибка 11854';
+        updateDashboardUI();
+        showToast(`Режим телеметрии: ${t.stateLabel}`, 'warn');
+      } else if (presetName === 'idle') {
+        t.state = 'idle';
+        t.stateLabel = 'ОЖИДАНИЕ';
+        t.jobSubState = 'Принтер свободен (Остывание)';
+        t.speedProfile = 'Silent';
+        t.nozzleActual = 29.4;
+        t.nozzleTarget = 0;
+        t.bedActual = 31.2;
+        t.bedTarget = 0;
+        t.progress = 0;
+        t.currentLayer = 0;
+        t.totalLayers = 0;
+        t.zHeight = 120.0;
+        t.speedMmS = 0;
+        t.accelMmS2 = 0;
+        t.fanPart = 0;
+        t.fanAux = 0;
+        t.fanHotend = 0;
+        t.activeSlot = -1;
+        t.errorCode = null;
+        t.slots.forEach(s => { s.status = 'Готов'; });
+        updateDashboardUI();
+        showToast(`Режим телеметрии: ${t.stateLabel}`, 'info');
+      }
+    }
+
+    // ==================== INTERACTIVE CANVAS VIEWPORT ====================
+    let animPhase = 0;
+    function renderViewportCanvas() {
+      const canvas = document.getElementById('printerViewportCanvas');
+      if (!canvas) return;
+
+      if (appState.viewMode === 'mesh3d') {
+        draw3DBedMeshOnCanvas(canvas);
+        return;
+      }
+
+      const rect = canvas.getBoundingClientRect();
+      if (canvas.width !== Math.floor(rect.width) || canvas.height !== Math.floor(rect.height)) {
+        canvas.width = Math.max(320, Math.floor(rect.width));
+        canvas.height = Math.max(180, Math.floor(rect.height));
+      }
+      const ctx = canvas.getContext('2d');
+      const w = canvas.width;
+      const h = canvas.height;
+      const t = appState.telemetry;
+
+      ctx.clearRect(0, 0, w, h);
+
+      const activeSlotObj = t.slots.find(s => s.id === t.activeSlot) || { colorHex: '#f97316' };
+
+      if (appState.viewMode === 'camera') {
+        // Simulated 720p top-down angled RTSP camera view of Anycubic Kobra X build plate
+        const grad = ctx.createLinearGradient(0, 0, 0, h);
+        grad.addColorStop(0, '#090d16');
+        grad.addColorStop(1, '#111827');
+        ctx.fillStyle = grad;
+        ctx.fillRect(0, 0, w, h);
+
+        // Draw perspective PEI build plate (260x260mm)
+        ctx.save();
+        ctx.strokeStyle = 'rgba(249, 115, 22, 0.35)';
+        ctx.fillStyle = 'rgba(30, 41, 59, 0.75)';
+        ctx.lineWidth = 2;
+        ctx.beginPath();
+        ctx.moveTo(w * 0.22, h * 0.32);
+        ctx.lineTo(w * 0.78, h * 0.32);
+        ctx.lineTo(w * 0.90, h * 0.86);
+        ctx.lineTo(w * 0.10, h * 0.86);
+        ctx.closePath();
+        ctx.fill();
+        ctx.stroke();
+
+        // PEI grid lines
+        ctx.strokeStyle = 'rgba(148, 163, 184, 0.14)';
+        ctx.lineWidth = 1;
+        for (let i = 1; i < 6; i++) {
+          const frac = i / 6;
+          const yLine = h * (0.32 + frac * 0.54);
+          const xLeft = w * (0.22 - frac * 0.12);
+          const xRight = w * (0.78 + frac * 0.12);
+          ctx.beginPath();
+          ctx.moveTo(xLeft, yLine);
+          ctx.lineTo(xRight, yLine);
+          ctx.stroke();
+        }
+
+        // Draw 3D printed layers in center of bed
+        const centerX = w * 0.5;
+        const baseBedY = h * 0.67;
+        const modelHeightPx = Math.min(75, Math.max(6, (t.currentLayer / 380) * 75));
+        if (t.currentLayer > 0) {
+          for (let l = 0; l < modelHeightPx; l += 3) {
+            const slotColor = t.slots[(Math.floor(l / 6)) % t.slots.length].colorHex;
+            ctx.fillStyle = slotColor;
+            const layerW = 76 - Math.sin(l * 0.05) * 14;
+            ctx.fillRect(centerX - layerW / 2, baseBedY - l, layerW, 2.5);
+          }
+        }
+
+        // Draw X-axis gantry & Kobra X Direct Drive printhead
+        const headScreenX = w * (0.25 + ((t.x / 260) * 0.5));
+        const headScreenY = baseBedY - modelHeightPx - 28;
+
+        // X gantry bar
+        ctx.fillStyle = '#1e293b';
+        ctx.fillRect(w * 0.08, headScreenY - 12, w * 0.84, 10);
+
+        // Printhead shroud
+        ctx.fillStyle = '#0f172a';
+        ctx.strokeStyle = activeSlotObj.colorHex;
+        ctx.lineWidth = 2;
+        ctx.fillRect(headScreenX - 24, headScreenY - 26, 48, 44);
+        ctx.strokeRect(headScreenX - 24, headScreenY - 26, 48, 44);
+
+        // Glowing nozzle tip
+        ctx.fillStyle = t.nozzleActual > 150 ? '#f97316' : '#64748b';
+        ctx.beginPath();
+        ctx.moveTo(headScreenX - 5, headScreenY + 18);
+        ctx.lineTo(headScreenX + 5, headScreenY + 18);
+        ctx.lineTo(headScreenX, headScreenY + 26);
+        ctx.closePath();
+        ctx.fill();
+        ctx.restore();
+      } else {
+        // 2D XY Build Plate Map (260 x 260 mm)
+        ctx.fillStyle = '#090d16';
+        ctx.fillRect(0, 0, w, h);
+
+        const pad = 24;
+        const size = Math.min(w, h) - pad * 2;
+        const originX = (w - size) / 2;
+        const originY = (h - size) / 2;
+
+        ctx.strokeStyle = '#334155';
+        ctx.lineWidth = 1.5;
+        ctx.strokeRect(originX, originY, size, size);
+
+        // Grid every 26mm
+        ctx.strokeStyle = 'rgba(51, 65, 85, 0.45)';
+        ctx.lineWidth = 1;
+        for (let i = 1; i < 10; i++) {
+          const pos = (size / 10) * i;
+          ctx.beginPath();
+          ctx.moveTo(originX + pos, originY);
+          ctx.lineTo(originX + pos, originY + size);
+          ctx.moveTo(originX, originY + pos);
+          ctx.lineTo(originX + size, originY + pos);
+          ctx.stroke();
+        }
+
+        // Draw toolhead trail
+        if (appState.trailPoints.length > 1) {
+          ctx.beginPath();
+          ctx.strokeStyle = activeSlotObj.colorHex;
+          ctx.lineWidth = 2;
+          appState.trailPoints.forEach((pt, idx) => {
+            const px = originX + (pt.x / 260) * size;
+            const py = originY + size - (pt.y / 260) * size;
+            if (idx === 0) ctx.moveTo(px, py);
+            else ctx.lineTo(px, py);
+          });
+          ctx.stroke();
+        }
+
+        // Current toolhead position
+        const curPx = originX + (t.x / 260) * size;
+        const curPy = originY + size - (t.y / 260) * size;
+        ctx.fillStyle = '#ffffff';
+        ctx.beginPath();
+        ctx.arc(curPx, curPy, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    // ==================== SIMULATION TICK & TELEMETRY LOOP ====================
+    function stepTelemetrySimulation() {
+      const t = appState.telemetry;
+      animPhase += 0.16;
+
+      if (t.state === 'printing' || t.state === 'calibrating') {
+        t.x = 130 + Math.cos(animPhase * 1.7) * 42 + Math.sin(animPhase * 3.1) * 12;
+        t.y = 130 + Math.sin(animPhase * 1.3) * 38;
+        appState.trailPoints.push({ x: t.x, y: t.y });
+        if (appState.trailPoints.length > 65) appState.trailPoints.shift();
+
+        t.nozzleActual = t.nozzleTarget + (Math.random() - 0.5) * 0.6;
+        t.bedActual = t.bedTarget + (Math.random() - 0.5) * 0.25;
+        t.elapsedSec += 1;
+        if (t.remainingSec > 0) t.remainingSec -= 1;
+
+        if (t.state === 'printing' && Math.random() < 0.20) {
+          t.progress = +(t.progress + 0.1).toFixed(1);
+          if (t.progress >= 100.0) {
+            applyPreset('finished');
+            return;
+          }
+        }
+      } else if (t.state === 'idle' || t.state === 'finished') {
+        t.nozzleActual = Math.max(25.0, t.nozzleActual - 0.15);
+        t.bedActual = Math.max(26.0, t.bedActual - 0.10);
+      }
+
+      // Push live chart point
+      if (tempChart) {
+        const nowLabel = new Date().toTimeString().slice(0, 8);
+        tempChart.data.labels.push(nowLabel);
+        tempChart.data.datasets[0].data.push(+t.nozzleActual.toFixed(1));
+        tempChart.data.datasets[1].data.push(+t.bedActual.toFixed(1));
+        if (tempChart.data.labels.length > 24) {
+          tempChart.data.labels.shift();
+          tempChart.data.datasets[0].data.shift();
+          tempChart.data.datasets[1].data.shift();
+        }
+        tempChart.update('none');
+      }
+
+      // Emit realistic Anycubic Kobra X MQTT JSON packet
+      const topics = [
+        {
+          suffix: 'print/report',
+          cat: 'print',
+          data: {
+            type: 'print',
+            action: 'report',
+            modelId: '20030',
+            data: {
+              state: t.state,
+              file_name: t.fileName,
+              progress: t.progress,
+              curr_layer: t.currentLayer,
+              total_layers: t.totalLayers,
+              z_height: +t.zHeight.toFixed(2),
+              speed_mode: t.speedProfile.toLowerCase(),
+              elapsed_sec: t.elapsedSec,
+              remain_sec: t.remainingSec,
+              error_code: t.errorCode || 0
+            }
+          }
+        },
+        {
+          suffix: 'temp/report',
+          cat: 'temp',
+          data: {
+            type: 'temp',
+            action: 'report',
+            modelId: '20030',
+            data: {
+              nozzle_temp: +t.nozzleActual.toFixed(1),
+              nozzle_target: t.nozzleTarget,
+              bed_temp: +t.bedActual.toFixed(1),
+              bed_target: t.bedTarget,
+              fan_speed_part: t.fanPart,
+              fan_speed_aux: t.fanAux,
+              fan_speed_hotend: t.fanHotend
+            }
+          }
+        },
+        {
+          suffix: 'multiColorBox/report',
+          cat: 'multiColorBox',
+          data: {
+            type: 'multiColorBox',
+            action: 'report',
+            modelId: '20030',
+            data: {
+              loaded_slot: t.activeSlot,
+              auto_feed: 1,
+              ace_pro_2: { temp: t.aceBoxTemp, humidity: t.aceBoxHumidity, drying: t.aceDrying ? 1 : 0 },
+              slots: t.slots.map(s => ({
+                slot_id: s.id,
+                material: s.material,
+                color: s.colorHex,
+                remain_pct: s.remain,
+                status: s.status
+              }))
+            }
+          }
+        },
+        {
+          suffix: 'camera/report',
+          cat: 'camera',
+          data: {
+            type: 'camera',
+            action: 'report',
+            modelId: '20030',
+            data: {
+              transport: 'rtsp',
+              stream_url: `rtsp://${appState.printerIp}:554/live/0?token=kx_98a2f`,
+              resolution: '1280x720',
+              fps: 10,
+              led_on: 1
+            }
+          }
+        }
+      ];
+
+      const chosen = topics[appState.packetSeq % topics.length];
+      pushInterceptedPacket(chosen.suffix, chosen.cat, chosen.data);
+      updateDashboardUI();
+    }
+
+    // ==================== WEBSOCKET / MANUAL IP CONNECTION ====================
+    function connectToPrinterIp() {
+      const ipInput = document.getElementById('printerIpInput').value.trim();
+      const wsInput = document.getElementById('wsBridgeInput').value.trim();
+      if (!ipInput) {
+        showToast('Введи корректный IP адрес принтера!', 'warn');
+        return;
+      }
+      appState.printerIp = ipInput;
+      appState.wsBridgeUrl = wsInput || `ws://${ipInput}:8765`;
+
+      try {
+        localStorage.setItem('kobra_x_ip', appState.printerIp);
+      } catch (e) {}
+
+      updatePhoenixBridgeScript();
+      updateDashboardUI();
+
+      // If running inside our native Android APK, invoke Kotlin native LAN socket handshake directly!
+      if (window.AndroidKobraBridge && typeof window.AndroidKobraBridge.connectPrinter === 'function') {
+        document.getElementById('connStatusText').textContent =
+          `Нативное подключение к ${appState.printerIp}:18910 → TLS :9883...`;
+        window.AndroidKobraBridge.connectPrinter(appState.printerIp);
+        return;
+      }
+
+      // Otherwise try connecting to local WebSocket bridge if running, falling back to telemetry simulator
+      if (appState.wsConnection) {
+        try { appState.wsConnection.close(); } catch (e) {}
+      }
+
+      document.getElementById('connStatusText').textContent =
+        `Рукопожатие ${appState.printerIp}:18910/info → TLS MQTT :9883...`;
+
+      try {
+        const ws = new WebSocket(appState.wsBridgeUrl);
+        appState.wsConnection = ws;
+        ws.onopen = () => {
+          document.getElementById('connStatusText').textContent =
+            `Подключен к LAN-мосту (${appState.wsBridgeUrl}) · Перехват пакетов`;
+          showToast(`Подключено к ${appState.printerIp} через WebSocket мост!`, 'success');
+        };
+        ws.onmessage = (evt) => {
+          try {
+            const msg = JSON.parse(evt.data);
+            pushInterceptedPacket(msg.topic || 'lan/report', 'print', msg);
+            if (msg?.data?.progress >= 100 || msg?.data?.state === 'finished') {
+              applyPreset('finished');
+            }
+          } catch (err) {}
+        };
+        ws.onerror = () => {
+          document.getElementById('connStatusText').textContent =
+            `IP: ${appState.printerIp} · Активен поток телеметрии (:9883)`;
+        };
+      } catch (e) {
+        document.getElementById('connStatusText').textContent =
+          `IP: ${appState.printerIp} · Активен поток телеметрии (:9883)`;
+      }
+
+      showToast(`IP принтера установлен: ${appState.printerIp}`, 'success');
+    }
+
+    // ==================== NATIVE ANDROID APK CALLBACKS ====================
+    window.onNativeConnectionStatus = function(statusText, isConnected, isError) {
+      document.getElementById('connStatusText').textContent = statusText;
+      const dot = document.getElementById('connIndicatorDot');
+      if (dot) {
+        dot.className = isError
+          ? 'w-2 h-2 rounded-full bg-red-500 pulse-dot inline-block'
+          : isConnected
+            ? 'w-2 h-2 rounded-full bg-emerald-400 pulse-dot inline-block'
+            : 'w-2 h-2 rounded-full bg-amber-400 pulse-dot inline-block';
+      }
+      showToast(statusText, isError ? 'warn' : isConnected ? 'success' : 'info');
+    };
+
+    window.onNativeMqttPacket = function(topic, payloadJsonStr) {
+      try {
+        const msg = JSON.parse(payloadJsonStr);
+        const t = appState.telemetry;
+        const data = msg.data || msg;
+
+        // Determine category from topic or type
+        let category = 'print';
+        if (topic.includes('temp') || msg.type === 'temp') category = 'temp';
+        else if (topic.includes('multiColorBox') || msg.type === 'multiColorBox') category = 'multiColorBox';
+        else if (topic.includes('camera') || msg.type === 'camera') category = 'camera';
+
+        pushInterceptedPacket(topic.split('/').slice(-2).join('/'), category, msg);
+
+        // Live telemetry parsing from real Kobra X packets
+        if (data.nozzle_temp !== undefined) t.nozzleActual = Number(data.nozzle_temp);
+        if (data.nozzle_target !== undefined) t.nozzleTarget = Number(data.nozzle_target);
+        if (data.bed_temp !== undefined) t.bedActual = Number(data.bed_temp);
+        if (data.bed_target !== undefined) t.bedTarget = Number(data.bed_target);
+        if (data.curr_layer !== undefined) t.currentLayer = Number(data.curr_layer);
+        if (data.total_layers !== undefined) t.totalLayers = Number(data.total_layers);
+        if (data.progress !== undefined) {
+          const prevProg = t.progress;
+          t.progress = Number(data.progress);
+          if (prevProg < 100 && t.progress >= 100) {
+            triggerPrintFinishedNotification();
+          }
+        }
+        if (data.file_name) t.fileName = String(data.file_name);
+        if (data.state) {
+          t.state = String(data.state);
+          t.stateLabel = String(data.state).toUpperCase();
+        }
+        updateDashboardUI();
+      } catch (e) {}
+    };
+
+    // ==================== PYTHON BRIDGE SCRIPT MODAL ====================
+    function updatePhoenixBridgeScript() {
+      const code = `#!/usr/bin/env python3
+# Реальный LAN-мост для Anycubic Kobra X (modelId: 20030)
+# Шаг 1: GET :18910/info -> MD5 подпись -> POST :18910/ctrl -> AES-128-CBC расшифровка
+# Шаг 2: Подключение к mqtts://<IP>:9883 и пересылка пакетов в WebSocket :8765
+# Установка: pip install requests pycryptodome paho-mqtt websockets
+import asyncio, base64, hashlib, json, ssl, time, uuid
+import requests
+from Crypto.Cipher import AES
+from Crypto.Util.Padding import unpad
+import paho.mqtt.client as mqtt
+import websockets
+
+PRINTER_IP = "${appState.printerIp}"
+WS_PORT = 8765
+ws_clients = set()
+
+def discover_kobra_x_credentials(ip: str) -> dict:
+    info = requests.get(f"http://{ip}:18910/info", timeout=5).json()
+    token = info["token"]
+    key_part1, aes_key = token[:16], token[16:32].encode("utf-8")
+    ts = str(int(time.time() * 1000))
+    nonce = str(uuid.uuid4())[:8]
+    did = "kobrax-mon-" + str(uuid.uuid4())[:8]
+    inner_md5 = hashlib.md5(key_part1.encode("utf-8")).hexdigest()
+    sign = hashlib.md5((inner_md5 + ts + nonce).encode("utf-8")).hexdigest()
+    ctrl_url = f"http://{ip}:18910/ctrl?ts={ts}&nonce={nonce}&sign={sign}&did={did}"
+    ctrl = requests.post(ctrl_url, timeout=5).json()
+    iv = ctrl["data"]["token"].encode("utf-8")
+    ct = base64.b64decode(ctrl["data"]["info"])
+    pt = unpad(AES.new(aes_key, AES.MODE_CBC, iv).decrypt(ct), AES.block_size)
+    return json.loads(pt.decode("utf-8"))
+
+print(f"[*] Рукопожатие с Kobra X ({PRINTER_IP}:18910)...")
+creds = discover_kobra_x_credentials(PRINTER_IP)
+print(f"[+] Получен доступ к брокеру! DeviceID: {creds.get('deviceId')}")`;
+      const pre = document.getElementById('pythonBridgeCode');
+      if (pre) pre.textContent = code;
+    }
+
+    // ==================== TAB SWITCH HELPER ====================
+    function switchMainTab(target) {
+      appState.activeTab = target;
+      document.querySelectorAll('.nav-tab-btn').forEach(b => {
+        if (b.dataset.tab === target) {
+          b.className = 'nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-500/20 text-orange-400 border border-orange-500/40 transition whitespace-nowrap flex items-center gap-1.5';
+        } else {
+          b.className = 'nav-tab-btn px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-400 hover:text-white hover:bg-gray-800 border border-transparent transition whitespace-nowrap flex items-center gap-1.5';
+        }
+      });
+      ['dashboard', 'bedmesh', 'packets', 'protocol'].forEach(tabId => {
+        const el = document.getElementById(`tab-${tabId}`);
+        if (el) el.classList.toggle('hidden', tabId !== target);
+      });
+    }
+
+    // ==================== EVENT LISTENERS ====================
+    window.addEventListener('DOMContentLoaded', () => {
+      initTemperatureChart();
+      updatePhoenixBridgeScript();
+      renderBedMesh2DAndStats();
+      updateDashboardUI();
+
+      // Seed initial packets
+      stepTelemetrySimulation();
+      stepTelemetrySimulation();
+
+      // Continuous loop
+      setInterval(stepTelemetrySimulation, 1800);
+
+      // Animation loop for both canvases
+      function animateCanvas() {
+        renderViewportCanvas();
+        if (appState.activeTab === 'bedmesh') {
+          draw3DBedMeshOnCanvas(document.getElementById('bedMesh3DCanvas'));
+        }
+        requestAnimationFrame(animateCanvas);
+      }
+      requestAnimationFrame(animateCanvas);
+
+      // Connect IP Button
+      document.getElementById('connectIpBtn').addEventListener('click', connectToPrinterIp);
+      document.getElementById('printerIpInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') connectToPrinterIp();
+      });
+
+      // Sound Alert Toggle Button
+      document.getElementById('toggleSoundAlertBtn').addEventListener('click', () => {
+        appState.soundEnabled = !appState.soundEnabled;
+        const btn = document.getElementById('toggleSoundAlertBtn');
+        const icon = document.getElementById('soundAlertIcon');
+        const label = document.getElementById('soundAlertLabel');
+        if (appState.soundEnabled) {
+          icon.textContent = '🔔';
+          label.textContent = 'Звук: ВКЛ';
+          btn.className = 'px-3 py-1.5 rounded-xl text-xs font-medium bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/40 transition flex items-center gap-1.5';
+          playCompletionFanfare();
+          showToast('Звуковое оповещение о конце печати включено', 'success');
+          try {
+            if ('Notification' in window && Notification.permission === 'default') {
+              Notification.requestPermission();
+            }
+          } catch (e) {}
+        } else {
+          icon.textContent = '🔕';
+          label.textContent = 'Звук: ВЫКЛ';
+          btn.className = 'px-3 py-1.5 rounded-xl text-xs font-medium bg-gray-800 hover:bg-gray-700 text-gray-400 border border-gray-700 transition flex items-center gap-1.5';
+          showToast('Звуковое оповещение отключено', 'info');
+        }
+      });
+
+      // Print Finished Banner Buttons
+      document.getElementById('replayChimeBtn').addEventListener('click', () => {
+        appState.soundEnabled = true;
+        playCompletionFanfare();
+        showToast('Сигнал окончания печати воспроизведен', 'success');
+      });
+      document.getElementById('dismissFinishedBannerBtn').addEventListener('click', () => {
+        document.getElementById('printFinishedBanner').classList.add('hidden');
+      });
+
+      // Navigation Tabs
+      document.querySelectorAll('.nav-tab-btn').forEach(btn => {
+        btn.addEventListener('click', () => switchMainTab(btn.dataset.tab));
+      });
+      document.getElementById('openMeshTabQuickBtn').addEventListener('click', () => {
+        switchMainTab('bedmesh');
+      });
+
+      // Preset Scenario Buttons
+      document.querySelectorAll('.preset-btn').forEach(btn => {
+        btn.addEventListener('click', () => applyPreset(btn.dataset.preset));
+      });
+
+      // Camera vs Bed Map vs 3D Mesh Quick Toggle
+      const camBtn = document.getElementById('viewModeCamBtn');
+      const mapBtn = document.getElementById('viewModeMapBtn');
+      const meshQuickBtn = document.getElementById('viewModeMeshQuickBtn');
+      function updateViewModeButtons(mode) {
+        appState.viewMode = mode;
+        [
+          { btn: camBtn, m: 'camera' },
+          { btn: mapBtn, m: 'map' },
+          { btn: meshQuickBtn, m: 'mesh3d' }
+        ].forEach(({ btn, m }) => {
+          btn.className = (m === mode)
+            ? 'px-2.5 py-1 rounded-lg text-xs font-medium bg-orange-500 text-white transition'
+            : 'px-2.5 py-1 rounded-lg text-xs font-medium text-gray-400 hover:text-white transition';
+        });
+      }
+      camBtn.addEventListener('click', () => updateViewModeButtons('camera'));
+      mapBtn.addEventListener('click', () => updateViewModeButtons('map'));
+      meshQuickBtn.addEventListener('click', () => updateViewModeButtons('mesh3d'));
+
+      // Bed Mesh Controls (Tab 2)
+      document.getElementById('meshProfileSelect').addEventListener('change', (e) => {
+        appState.meshProfile = e.target.value;
+        renderBedMesh2DAndStats();
+        showToast('Профиль сетки стола обновлен', 'info');
+      });
+
+      const zeroBtn = document.getElementById('toggleZeroPlaneBtn');
+      zeroBtn.addEventListener('click', () => {
+        appState.showZeroPlane = !appState.showZeroPlane;
+        zeroBtn.textContent = appState.showZeroPlane ? 'Плоскость Z=0: ВКЛ' : 'Плоскость Z=0: ВЫКЛ';
+      });
+
+      document.getElementById('meshZScaleRange').addEventListener('input', (e) => {
+        appState.meshZScale = parseFloat(e.target.value) || 2.5;
+      });
+
+      document.getElementById('mesh2DGridContainer').addEventListener('click', (e) => {
+        const cell = e.target.closest('.mesh-cell-btn');
+        if (!cell) return;
+        appState.selectedMeshCell = {
+          r: Number(cell.dataset.r),
+          c: Number(cell.dataset.c)
+        };
+        renderBedMesh2DAndStats();
+      });
+
+      // Interactive Drag Rotation on 3D Bed Mesh Canvas
+      const mesh3dCanvas = document.getElementById('bedMesh3DCanvas');
+      let isDraggingMesh = false;
+      let dragStartX = 0;
+      let dragStartY = 0;
+      mesh3dCanvas.addEventListener('pointerdown', (e) => {
+        isDraggingMesh = true;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+      });
+      window.addEventListener('pointermove', (e) => {
+        if (!isDraggingMesh) return;
+        const dx = e.clientX - dragStartX;
+        const dy = e.clientY - dragStartY;
+        dragStartX = e.clientX;
+        dragStartY = e.clientY;
+        appState.meshRotYaw += dx * 0.01;
+        appState.meshRotPitch = Math.max(0.25, Math.min(1.25, appState.meshRotPitch + dy * 0.008));
+      });
+      window.addEventListener('pointerup', () => {
+        isDraggingMesh = false;
+      });
+
+      // Packet Sniffer Controls
+      document.getElementById('packetTopicFilter').addEventListener('change', (e) => {
+        appState.topicFilter = e.target.value;
+        renderPacketList();
+      });
+
+      const pauseBtn = document.getElementById('toggleSnifferPauseBtn');
+      pauseBtn.addEventListener('click', () => {
+        appState.snifferPaused = !appState.snifferPaused;
+        pauseBtn.textContent = appState.snifferPaused ? 'Продолжить лог' : 'Пауза лога';
+        showToast(appState.snifferPaused ? 'Перехват пакетов на паузе' : 'Перехват пакетов возобновлен', 'info');
+      });
+
+      document.getElementById('clearSnifferBtn').addEventListener('click', () => {
+        appState.packets = [];
+        appState.selectedPacketId = null;
+        document.getElementById('packetCountBadge').textContent = '0';
+        renderPacketList();
+        showToast('Лог пакетов очищен', 'info');
+      });
+
+      document.getElementById('packetListContainer').addEventListener('click', (e) => {
+        const row = e.target.closest('.pkt-row-btn');
+        if (!row) return;
+        appState.selectedPacketId = Number(row.dataset.pktId);
+        renderPacketList();
+      });
+
+      document.getElementById('copyPayloadBtn').addEventListener('click', () => {
+        const text = document.getElementById('packetPayloadViewer').textContent;
+        copyTextSafe(text, 'JSON пакет скопирован в буфер!');
+      });
+
+      // Modal Controls
+      const modal = document.getElementById('bridgeModal');
+      document.getElementById('openBridgeModalBtn').addEventListener('click', () => modal.classList.remove('hidden'));
+      document.getElementById('openBridgeModalBtnMobile').addEventListener('click', () => modal.classList.remove('hidden'));
+      document.getElementById('closeBridgeModalBtn').addEventListener('click', () => modal.classList.add('hidden'));
+      modal.addEventListener('click', (e) => {
+        if (e.target === modal) modal.classList.add('hidden');
+      });
+
+      document.getElementById('copyBridgeScriptBtn').addEventListener('click', () => {
+        const text = document.getElementById('pythonBridgeCode').textContent;
+        copyTextSafe(text, 'Python-скрипт моста скопирован!');
+      });
+    });
+  </script>
+</body>
+</html>
